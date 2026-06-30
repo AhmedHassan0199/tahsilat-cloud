@@ -9,4 +9,4 @@ binding = "ASSETS"
 [[d1_databases]]
 binding = "DB"
 database_name = "tahsilat-db"
-database_id = "REPLACE_WITH_CLOUDFLARE_D1_DATABASE_ID"
+database_id = "7f3509ae-f3ab-41fc-97bf-65543974d081"
