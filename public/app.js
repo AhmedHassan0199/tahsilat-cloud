@@ -34,13 +34,16 @@ function showToast(message, isError = false) {
 }
 
 async function api(path, options = {}) {
+  const authMode = options.authMode || "default";
+  const fetchOptions = { ...options };
+  delete fetchOptions.authMode;
   const response = await fetch(path, {
     headers: { "Content-Type": "application/json" },
     credentials: "same-origin",
-    ...options,
+    ...fetchOptions,
   });
   const data = await response.json().catch(() => ({}));
-  if (response.status === 401 && path !== "/api/login") {
+  if (response.status === 401 && authMode !== "login") {
     showLogin();
     throw new Error("انتهت الجلسة، برجاء تسجيل الدخول");
   }
@@ -491,17 +494,17 @@ function bindEvents() {
 
   qs("#loginForm").addEventListener("submit", async (event) => {
     event.preventDefault();
+    const submitButton = event.currentTarget.querySelector('button[type="submit"]');
+    submitButton.disabled = true;
+    submitButton.textContent = "جاري الدخول...";
     try {
-      await api("/api/login", { method: "POST", body: JSON.stringify(formData(event.currentTarget)) });
+      await api("/api/login", { method: "POST", body: JSON.stringify(formData(event.currentTarget)), authMode: "login" });
       event.currentTarget.reset();
-      setActiveTab("dashboard");
-      await reloadAll();
-      resetCollectionForm();
-      resetExpenseForm();
-      showApp();
-      showToast("تم تسجيل الدخول");
+      window.location.replace(`/?login=${Date.now()}`);
     } catch (error) {
       showToast(error.message, true);
+      submitButton.disabled = false;
+      submitButton.textContent = "دخول";
     }
   });
 
