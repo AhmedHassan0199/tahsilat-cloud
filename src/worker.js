@@ -21,11 +21,12 @@ export default {
 
 async function handleApi(request, env, url) {
   const method = request.method.toUpperCase();
-  const publicRoutes = new Set(["/api/login", "/api/health"]);
+  const publicRoutes = new Set(["/api/login", "/api/login-page", "/api/health"]);
   const user = publicRoutes.has(url.pathname) ? null : await requireUser(request, env);
 
   if (url.pathname === "/api/health" && method === "GET") return health(env);
   if (url.pathname === "/api/login" && method === "POST") return login(request, env);
+  if (url.pathname === "/api/login-page" && method === "POST") return loginPage(request, env);
   if (url.pathname === "/api/logout" && method === "POST") return logout(request, env, user);
   if (url.pathname === "/api/me" && method === "GET") return json({ user });
   if (url.pathname === "/api/bootstrap" && method === "GET") return bootstrap(env, user);
@@ -53,6 +54,13 @@ async function handleApi(request, env, url) {
   if (url.pathname === "/api/users" && method === "GET") return users(env, user);
   if (url.pathname === "/api/users" && method === "POST") return createUser(request, env, user);
   return json({ error: "Not found" }, 404);
+}
+
+function redirect(location, headers = {}) {
+  return new Response(null, {
+    status: 303,
+    headers: { location, ...headers },
+  });
 }
 
 async function health(env) {
@@ -158,6 +166,35 @@ async function login(request, env) {
     console.error("login_failed", error?.stack || error?.message || error);
     throw error;
   }
+}
+
+async function loginPage(request, env) {
+  try {
+    const form = await request.formData();
+    const username = String(form.get("username") || "").trim().toLowerCase();
+    const password = String(form.get("password") || "");
+    const result = await authenticate(request, env, username, password);
+    if (!result.ok) return redirect("/?login_error=1");
+    return redirect(`/?login=${Date.now()}`, {
+      "set-cookie": cookieHeader(SESSION_COOKIE, result.token, { maxAge: SESSION_DAYS * 24 * 60 * 60 }),
+    });
+  } catch (error) {
+    console.error("login_page_failed", error?.stack || error?.message || error);
+    return redirect("/?login_error=1");
+  }
+}
+
+async function authenticate(request, env, username, password) {
+  if (!username || !password) return { ok: false };
+  const user = await env.DB.prepare("SELECT * FROM users WHERE username = ? AND active = 1").bind(username).first();
+  if (!user || !(await verifyPassword(password, user.password_hash))) return { ok: false };
+  const token = crypto.randomUUID() + "." + crypto.randomUUID();
+  const expires = new Date(Date.now() + SESSION_DAYS * 24 * 60 * 60 * 1000).toISOString();
+  await env.DB.prepare("INSERT INTO sessions(token, user_id, expires_at, created_at) VALUES(?, ?, ?, ?)")
+    .bind(token, user.id, expires, nowIso())
+    .run();
+  await insertAudit(env, request, user, "LOGIN", "sessions", null, null, { username });
+  return { ok: true, user, token };
 }
 
 async function logout(request, env, user) {

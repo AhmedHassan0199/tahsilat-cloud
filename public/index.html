@@ -8,7 +8,7 @@
 </head>
 <body>
   <section id="loginScreen" class="login-screen">
-    <form id="loginForm" class="login-card">
+    <form id="loginForm" class="login-card" method="post" action="/api/login-page">
       <h1>نظام التحصيلات والمصروفات</h1>
       <p>تسجيل الدخول</p>
       <label>اسم المستخدم<input name="username" autocomplete="username" required></label>
@@ -271,8 +271,8 @@
     </section>
   </main>
 
-  <div id="toast" role="status" aria-live="polite"></div>
   </div>
+  <div id="toast" role="status" aria-live="polite"></div>
   <script src="/app.js"></script>
 </body>
 </html>

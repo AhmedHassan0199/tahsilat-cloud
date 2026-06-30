@@ -63,6 +63,16 @@ function showApp() {
   qs("#appShell").classList.remove("hidden");
 }
 
+function showLoginErrorFromUrl() {
+  const url = new URL(window.location.href);
+  if (url.searchParams.get("login_error") === "1") {
+    showLogin();
+    showToast("بيانات الدخول غير صحيحة", true);
+    url.searchParams.delete("login_error");
+    window.history.replaceState({}, "", url.pathname + (url.search ? url.search : ""));
+  }
+}
+
 function setActiveTab(name) {
   qsa(".tab").forEach((item) => item.classList.toggle("active", item.dataset.tab === name));
   qsa(".tab-panel").forEach((item) => item.classList.toggle("active", item.id === name));
@@ -492,20 +502,10 @@ function bindEvents() {
     showLogin();
   });
 
-  qs("#loginForm").addEventListener("submit", async (event) => {
-    event.preventDefault();
+  qs("#loginForm").addEventListener("submit", (event) => {
     const submitButton = event.currentTarget.querySelector('button[type="submit"]');
     submitButton.disabled = true;
     submitButton.textContent = "جاري الدخول...";
-    try {
-      await api("/api/login", { method: "POST", body: JSON.stringify(formData(event.currentTarget)), authMode: "login" });
-      event.currentTarget.reset();
-      window.location.replace(`/?login=${Date.now()}`);
-    } catch (error) {
-      showToast(error.message, true);
-      submitButton.disabled = false;
-      submitButton.textContent = "دخول";
-    }
   });
 
   qs("#collectionForm").addEventListener("submit", (event) => saveCollection(event).catch((error) => showToast(error.message, true)));
@@ -565,6 +565,7 @@ async function init() {
   } catch (error) {
     showLogin();
   }
+  showLoginErrorFromUrl();
 }
 
 init().catch((error) => showToast(error.message, true));
