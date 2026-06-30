@@ -19,6 +19,7 @@ body {
   font-family: "Segoe UI", Tahoma, Arial, sans-serif;
   background: var(--bg);
   color: var(--ink);
+  overflow-x: hidden;
 }
 
 .hidden { display: none !important; }
@@ -167,6 +168,8 @@ main {
   background: #eef2f6;
   border-bottom: 1px solid var(--line);
   overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: thin;
 }
 
 .tab {
@@ -413,8 +416,252 @@ label.check input {
 }
 
 @media (max-width: 640px) {
-  main { padding: 12px; }
-  .topbar { padding: 14px; }
-  .metric strong { font-size: 20px; }
-  .panel-head { align-items: stretch; flex-direction: column; }
+  .login-screen {
+    align-items: stretch;
+    padding: 12px;
+  }
+
+  .login-card {
+    align-self: center;
+    padding: 18px;
+  }
+
+  .login-card h1 {
+    font-size: 21px;
+  }
+
+  main {
+    padding: 10px;
+  }
+
+  .topbar {
+    min-height: 0;
+    padding: 12px;
+    gap: 12px;
+  }
+
+  .topbar h1 {
+    font-size: 20px;
+    line-height: 1.25;
+  }
+
+  .topbar p {
+    font-size: 12px;
+    overflow-wrap: anywhere;
+  }
+
+  .top-actions {
+    width: 100%;
+    display: grid;
+    grid-template-columns: 1fr 44px minmax(86px, auto) minmax(72px, auto);
+    gap: 6px;
+  }
+
+  .user-pill {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 12px;
+  }
+
+  button {
+    min-height: 42px;
+    padding: 9px 10px;
+  }
+
+  .metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+    margin-bottom: 10px;
+  }
+
+  .metric {
+    padding: 10px;
+  }
+
+  .metric span {
+    font-size: 12px;
+    margin-bottom: 6px;
+  }
+
+  .metric strong {
+    font-size: 18px;
+    overflow-wrap: anywhere;
+  }
+
+  .workbench {
+    border-radius: 6px;
+  }
+
+  .tabs {
+    position: sticky;
+    top: 0;
+    z-index: 5;
+    padding: 6px;
+    gap: 4px;
+  }
+
+  .tab {
+    flex: 0 0 auto;
+    min-height: 38px;
+    padding: 8px 11px;
+    font-size: 13px;
+  }
+
+  .tab-panel {
+    padding: 10px;
+  }
+
+  .grid {
+    gap: 10px;
+    margin-bottom: 10px;
+  }
+
+  .panel,
+  .form-panel {
+    border-radius: 6px;
+  }
+
+  .panel-head {
+    align-items: stretch;
+    flex-direction: column;
+    min-height: 0;
+    padding: 10px;
+  }
+
+  h2 {
+    font-size: 16px;
+  }
+
+  .entry-layout {
+    gap: 10px;
+  }
+
+  .form-panel {
+    padding: 12px;
+  }
+
+  .form-actions {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  .filters {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 8px;
+  }
+
+  .filters input,
+  .filters select {
+    min-width: 0;
+  }
+
+  .records {
+    max-height: none;
+  }
+
+  .table-wrap {
+    overflow: visible;
+  }
+
+  table {
+    min-width: 0;
+    width: 100%;
+    border-collapse: separate;
+    border-spacing: 0 8px;
+  }
+
+  thead {
+    display: none;
+  }
+
+  tbody,
+  tr,
+  td {
+    display: block;
+    width: 100%;
+  }
+
+  tr {
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: #fff;
+    overflow: hidden;
+  }
+
+  td {
+    display: grid;
+    grid-template-columns: minmax(96px, 38%) minmax(0, 1fr);
+    gap: 8px;
+    min-height: 38px;
+    border-bottom: 1px solid #eef2f6;
+    padding: 9px 10px;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
+  td::before {
+    content: attr(data-label);
+    color: var(--muted);
+    font-weight: 600;
+  }
+
+  td:last-child {
+    border-bottom: 0;
+  }
+
+  td.actions {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+  }
+
+  td.actions::before {
+    content: none;
+  }
+
+  td.actions button {
+    min-height: 36px;
+  }
+
+  td details {
+    max-width: none;
+  }
+
+  td pre {
+    max-height: 220px;
+    font-size: 12px;
+  }
+
+  .insights {
+    padding: 10px;
+  }
+
+  .insights div {
+    grid-template-columns: 1fr;
+    gap: 4px;
+  }
+
+  #toast {
+    left: 10px;
+    right: 10px;
+    bottom: 10px;
+    min-width: 0;
+    max-width: none;
+  }
+}
+
+@media (max-width: 420px) {
+  .metrics {
+    grid-template-columns: 1fr;
+  }
+
+  .top-actions {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .user-pill {
+    grid-column: 1 / -1;
+  }
 }

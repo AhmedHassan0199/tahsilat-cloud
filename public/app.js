@@ -103,19 +103,19 @@ function renderDashboard() {
 
   qs("#monthRows").innerHTML = data.by_month.map((row) => `
     <tr>
-      <td>${monthName(row.month)}</td>
-      <td>${money(row.collections)}</td>
-      <td>${money(row.expenses)}</td>
-      <td class="${Number(row.net) < 0 ? "negative" : "positive"}">${money(row.net)}</td>
+      <td data-label="الشهر">${monthName(row.month)}</td>
+      <td data-label="التحصيل">${money(row.collections)}</td>
+      <td data-label="المصروفات">${money(row.expenses)}</td>
+      <td data-label="الصافي" class="${Number(row.net) < 0 ? "negative" : "positive"}">${money(row.net)}</td>
     </tr>
   `).join("");
 
   qs("#responsibleRows").innerHTML = data.by_responsible.map((row) => `
-    <tr><td>${row.responsible}</td><td>${money(row.total)}</td><td>${money(row.count)}</td></tr>
+    <tr><td data-label="المسؤول">${row.responsible}</td><td data-label="الإجمالي">${money(row.total)}</td><td data-label="عدد التحصيلات">${money(row.count)}</td></tr>
   `).join("") || `<tr><td colspan="3" class="muted">لا توجد بيانات</td></tr>`;
 
   qs("#clientRows").innerHTML = data.top_clients.map((row) => `
-    <tr><td>${row.client_name}</td><td>${money(row.total)}</td><td>${money(row.count)}</td></tr>
+    <tr><td data-label="العميل">${row.client_name}</td><td data-label="الإجمالي">${money(row.total)}</td><td data-label="عدد العمليات">${money(row.count)}</td></tr>
   `).join("") || `<tr><td colspan="3" class="muted">لا توجد بيانات</td></tr>`;
 
   const bestMonth = data.insights.best_month;
@@ -129,12 +129,12 @@ function renderDashboard() {
 
   qs("#treasuryRows").innerHTML = data.treasury_by_method.map((row) => `
     <tr>
-      <td>${row.payment_method || "غير محدد"}</td>
-      <td>${money(row.collections)}</td>
-      <td>${money(row.expenses)}</td>
-      <td>${money(row.transfers_in)}</td>
-      <td>${money(row.transfers_out)}</td>
-      <td class="${Number(row.balance) < 0 ? "negative" : "positive"}">${money(row.balance)}</td>
+      <td data-label="طريقة الدفع">${row.payment_method || "غير محدد"}</td>
+      <td data-label="تحصيل">${money(row.collections)}</td>
+      <td data-label="مصروف">${money(row.expenses)}</td>
+      <td data-label="توسيط داخل">${money(row.transfers_in)}</td>
+      <td data-label="توسيط خارج">${money(row.transfers_out)}</td>
+      <td data-label="الرصيد" class="${Number(row.balance) < 0 ? "negative" : "positive"}">${money(row.balance)}</td>
     </tr>
   `).join("");
 }
@@ -162,12 +162,12 @@ function expenseQuery() {
 function renderCollections() {
   qs("#collectionRows").innerHTML = state.collections.map((item) => `
     <tr>
-      <td>${item.entry_date || "-"}</td>
-      <td>${item.month || "-"}</td>
-      <td>${item.responsible}</td>
-      <td>${item.client_name}</td>
-      <td>${money(item.amount)}</td>
-      <td>${item.payment_method}</td>
+      <td data-label="التاريخ">${item.entry_date || "-"}</td>
+      <td data-label="الشهر">${item.month || "-"}</td>
+      <td data-label="المسؤول">${item.responsible}</td>
+      <td data-label="العميل">${item.client_name}</td>
+      <td data-label="المبلغ">${money(item.amount)}</td>
+      <td data-label="الطريقة">${item.payment_method}</td>
       <td class="actions">
         <button type="button" data-edit-collection="${item.id}" title="تعديل">✎</button>
         <button class="danger" type="button" data-delete-collection="${item.id}" title="حذف">×</button>
@@ -179,13 +179,13 @@ function renderCollections() {
 function renderExpenses() {
   qs("#expenseRows").innerHTML = state.expenses.map((item) => `
     <tr>
-      <td>${item.entry_date || "-"}</td>
-      <td>${item.month || "-"}</td>
-      <td>${item.expense_type}</td>
-      <td>${item.description}</td>
-      <td>${money(item.amount)}</td>
-      <td>${item.payment_method}</td>
-      <td>${item.deducted_from_treasury ? "نعم" : "لا"}</td>
+      <td data-label="التاريخ">${item.entry_date || "-"}</td>
+      <td data-label="الشهر">${item.month || "-"}</td>
+      <td data-label="النوع">${item.expense_type}</td>
+      <td data-label="وجه الصرف">${item.description}</td>
+      <td data-label="المبلغ">${money(item.amount)}</td>
+      <td data-label="الطريقة">${item.payment_method}</td>
+      <td data-label="الخزينة">${item.deducted_from_treasury ? "نعم" : "لا"}</td>
       <td class="actions">
         <button type="button" data-edit-expense="${item.id}" title="تعديل">✎</button>
         <button class="danger" type="button" data-delete-expense="${item.id}" title="حذف">×</button>
@@ -197,12 +197,12 @@ function renderExpenses() {
 function renderAudit() {
   qs("#auditRows").innerHTML = state.audit.map((item) => `
     <tr>
-      <td>${item.created_at}</td>
-      <td>${item.username || "-"}</td>
-      <td>${item.action}</td>
-      <td>${item.table_name}</td>
-      <td>${item.record_id || "-"}</td>
-      <td><details><summary>عرض</summary>${auditDetails(item)}</details></td>
+      <td data-label="الوقت">${item.created_at}</td>
+      <td data-label="المستخدم">${item.username || "-"}</td>
+      <td data-label="الإجراء">${item.action}</td>
+      <td data-label="الجدول">${item.table_name}</td>
+      <td data-label="رقم">${item.record_id || "-"}</td>
+      <td data-label="التفاصيل"><details><summary>عرض</summary>${auditDetails(item)}</details></td>
     </tr>
   `).join("") || `<tr><td colspan="6" class="muted">لا توجد تعديلات</td></tr>`;
 }
@@ -210,12 +210,12 @@ function renderAudit() {
 function renderTransfers() {
   qs("#transferRows").innerHTML = state.transfers.map((item) => `
     <tr>
-      <td>${item.entry_date || "-"}</td>
-      <td>${item.source_method}</td>
-      <td>${item.target_method}</td>
-      <td>${money(item.amount)}</td>
-      <td>${item.created_by_name || "-"}</td>
-      <td>${item.note || "-"}</td>
+      <td data-label="التاريخ">${item.entry_date || "-"}</td>
+      <td data-label="من">${item.source_method}</td>
+      <td data-label="إلى">${item.target_method}</td>
+      <td data-label="المبلغ">${money(item.amount)}</td>
+      <td data-label="المستخدم">${item.created_by_name || "-"}</td>
+      <td data-label="ملاحظة">${item.note || "-"}</td>
     </tr>
   `).join("") || `<tr><td colspan="6" class="muted">لا توجد عمليات توسيط</td></tr>`;
 }
@@ -225,11 +225,11 @@ function renderUsers() {
   if (!body) return;
   body.innerHTML = state.users.map((item) => `
     <tr>
-      <td>${item.username}</td>
-      <td>${item.display_name}</td>
-      <td>${item.role}</td>
-      <td>${item.active ? "نشط" : "موقوف"}</td>
-      <td>${item.created_at}</td>
+      <td data-label="اسم المستخدم">${item.username}</td>
+      <td data-label="الاسم الكامل">${item.display_name}</td>
+      <td data-label="الصلاحية">${item.role}</td>
+      <td data-label="الحالة">${item.active ? "نشط" : "موقوف"}</td>
+      <td data-label="تاريخ الإنشاء">${item.created_at}</td>
     </tr>
   `).join("") || `<tr><td colspan="5" class="muted">لا توجد بيانات مستخدمين</td></tr>`;
 }
