@@ -46,6 +46,9 @@ async function handleApi(request, env, url) {
   }
   if (url.pathname === "/api/payment-methods" && method === "GET") return paymentMethods(env);
   if (url.pathname === "/api/payment-methods" && method === "POST") return createPaymentMethod(request, env, user);
+  if (url.pathname === "/api/transfers" && method === "GET") return listTransfers(env);
+  if (url.pathname === "/api/transfers" && method === "POST") return createTransfer(request, env, user);
+  if (url.pathname === "/api/backup" && method === "GET") return backup(env, user);
   if (url.pathname === "/api/audit" && method === "GET") return auditLog(env, user);
   if (url.pathname === "/api/users" && method === "GET") return users(env, user);
   if (url.pathname === "/api/users" && method === "POST") return createUser(request, env, user);
@@ -57,6 +60,7 @@ async function health(env) {
   checks.users = await env.DB.prepare("SELECT COUNT(*) AS count FROM users").first();
   checks.sessions = await env.DB.prepare("SELECT COUNT(*) AS count FROM sessions").first();
   checks.collections = await env.DB.prepare("SELECT COUNT(*) AS count FROM collections").first();
+  checks.transfers = await env.DB.prepare("SELECT COUNT(*) AS count FROM transfers").first().catch(() => ({ count: "migration_needed" }));
   checks.payment_methods = await env.DB.prepare("SELECT COUNT(*) AS count FROM payment_methods").first();
   checks.admin = await env.DB.prepare("SELECT id, username, role, active FROM users WHERE username = 'admin'").first();
   return json({ ok: true, checks });
@@ -211,12 +215,18 @@ async function dashboard(env) {
       SELECT name FROM payment_methods WHERE active=1
       UNION SELECT payment_method FROM collections
       UNION SELECT payment_method FROM expenses
+      UNION SELECT source_method FROM transfers
+      UNION SELECT target_method FROM transfers
     )
     SELECT name AS payment_method,
       COALESCE((SELECT SUM(amount) FROM collections c WHERE c.payment_method=name),0) AS collections,
       COALESCE((SELECT SUM(amount) FROM expenses e WHERE e.payment_method=name AND e.deducted_from_treasury=1),0) AS expenses,
+      COALESCE((SELECT SUM(amount) FROM transfers t WHERE t.target_method=name),0) AS transfers_in,
+      COALESCE((SELECT SUM(amount) FROM transfers t WHERE t.source_method=name),0) AS transfers_out,
       COALESCE((SELECT SUM(amount) FROM collections c WHERE c.payment_method=name),0)
-      - COALESCE((SELECT SUM(amount) FROM expenses e WHERE e.payment_method=name AND e.deducted_from_treasury=1),0) AS balance
+      - COALESCE((SELECT SUM(amount) FROM expenses e WHERE e.payment_method=name AND e.deducted_from_treasury=1),0)
+      + COALESCE((SELECT SUM(amount) FROM transfers t WHERE t.target_method=name),0)
+      - COALESCE((SELECT SUM(amount) FROM transfers t WHERE t.source_method=name),0) AS balance
     FROM methods ORDER BY balance DESC, name`
   ).all();
   const topClients = await env.DB.prepare(
@@ -252,6 +262,17 @@ async function dashboard(env) {
       best_responsible: byResponsible.results[0] || null,
     },
   });
+}
+
+async function methodBalance(env, method) {
+  const row = await env.DB.prepare(
+    `SELECT
+      COALESCE((SELECT SUM(amount) FROM collections WHERE payment_method = ?),0)
+      - COALESCE((SELECT SUM(amount) FROM expenses WHERE payment_method = ? AND deducted_from_treasury = 1),0)
+      + COALESCE((SELECT SUM(amount) FROM transfers WHERE target_method = ?),0)
+      - COALESCE((SELECT SUM(amount) FROM transfers WHERE source_method = ?),0) AS balance`
+  ).bind(method, method, method, method).first();
+  return Number(row?.balance || 0);
 }
 
 function collectionData(payload) {
@@ -424,10 +445,74 @@ async function createPaymentMethod(request, env, user) {
   return json({ ok: true });
 }
 
+function transferData(payload) {
+  return {
+    entry_date: parseDateValue(payload.entry_date) || new Date().toISOString().slice(0, 10),
+    source_method: String(payload.source_method || "").trim(),
+    target_method: String(payload.target_method || "").trim(),
+    amount: Number(payload.amount || 0),
+    note: String(payload.note || "").trim() || null,
+  };
+}
+
+function validateTransfer(data) {
+  if (!data.source_method) throw new HttpError("طريقة الدفع المصدر مطلوبة", 400);
+  if (!data.target_method) throw new HttpError("طريقة الدفع الهدف مطلوبة", 400);
+  if (data.source_method === data.target_method) throw new HttpError("لا يمكن التوسيط لنفس طريقة الدفع", 400);
+  if (!Number.isFinite(data.amount) || data.amount <= 0) throw new HttpError("قيمة التوسيط يجب أن تكون أكبر من صفر", 400);
+}
+
+async function listTransfers(env) {
+  const result = await env.DB.prepare(
+    `SELECT transfers.*, users.display_name AS created_by_name
+     FROM transfers
+     LEFT JOIN users ON users.id = transfers.created_by
+     ORDER BY COALESCE(entry_date, '') DESC, id DESC
+     LIMIT 500`
+  ).all();
+  return json({ items: result.results });
+}
+
+async function createTransfer(request, env, user) {
+  assertCanWrite(user);
+  const data = transferData(await readJson(request));
+  validateTransfer(data);
+  const available = await methodBalance(env, data.source_method);
+  if (data.amount > available) {
+    throw new HttpError(`الرصيد المتاح في المصدر ${available} ولا يكفي للتوسيط`, 400);
+  }
+  const result = await env.DB.prepare(
+    `INSERT INTO transfers(entry_date, source_method, target_method, amount, note, created_by, created_at)
+     VALUES(?, ?, ?, ?, ?, ?, ?)`
+  ).bind(data.entry_date, data.source_method, data.target_method, data.amount, data.note, user.id, nowIso()).run();
+  await insertAudit(env, request, user, "INSERT", "transfers", result.meta.last_row_id, null, data);
+  return json({ id: result.meta.last_row_id });
+}
+
 async function auditLog(env, user) {
   if (user.role !== "admin") throw new HttpError("Admins only", 403);
   const result = await env.DB.prepare("SELECT * FROM audit_logs ORDER BY id DESC LIMIT 300").all();
   return json({ items: result.results });
+}
+
+async function backup(env, user) {
+  if (user.role !== "admin") throw new HttpError("Admins only", 403);
+  const tables = {};
+  for (const table of ["users", "payment_methods", "collections", "expenses", "transfers", "audit_logs"]) {
+    const result = await env.DB.prepare(`SELECT * FROM ${table} ORDER BY id`).all();
+    tables[table] = result.results.map((row) => {
+      if (table !== "users") return row;
+      const copy = { ...row };
+      delete copy.password_hash;
+      return copy;
+    });
+  }
+  return json({
+    exported_at: nowIso(),
+    format: "tahsilat-d1-json-v1",
+    note: "Password hashes and sessions are intentionally excluded from browser backups.",
+    tables,
+  });
 }
 
 async function users(env, user) {

@@ -4,7 +4,9 @@ const state = {
   dashboard: null,
   collections: [],
   expenses: [],
+  transfers: [],
   audit: [],
+  users: [],
   user: null,
 };
 
@@ -55,6 +57,11 @@ function showLogin() {
 function showApp() {
   qs("#loginScreen").classList.add("hidden");
   qs("#appShell").classList.remove("hidden");
+}
+
+function setActiveTab(name) {
+  qsa(".tab").forEach((item) => item.classList.toggle("active", item.dataset.tab === name));
+  qsa(".tab-panel").forEach((item) => item.classList.toggle("active", item.id === name));
 }
 
 function fillSelect(select, values, current = "") {
@@ -124,6 +131,8 @@ function renderDashboard() {
       <td>${row.payment_method || "غير محدد"}</td>
       <td>${money(row.collections)}</td>
       <td>${money(row.expenses)}</td>
+      <td>${money(row.transfers_in)}</td>
+      <td>${money(row.transfers_out)}</td>
       <td class="${Number(row.balance) < 0 ? "negative" : "positive"}">${money(row.balance)}</td>
     </tr>
   `).join("");
@@ -188,12 +197,66 @@ function renderAudit() {
   qs("#auditRows").innerHTML = state.audit.map((item) => `
     <tr>
       <td>${item.created_at}</td>
+      <td>${item.username || "-"}</td>
       <td>${item.action}</td>
-      <td>${item.entity}</td>
-      <td>${item.entity_id || "-"}</td>
-      <td>${item.user_name}</td>
+      <td>${item.table_name}</td>
+      <td>${item.record_id || "-"}</td>
+      <td><details><summary>عرض</summary>${auditDetails(item)}</details></td>
     </tr>
-  `).join("") || `<tr><td colspan="5" class="muted">لا توجد تعديلات</td></tr>`;
+  `).join("") || `<tr><td colspan="6" class="muted">لا توجد تعديلات</td></tr>`;
+}
+
+function renderTransfers() {
+  qs("#transferRows").innerHTML = state.transfers.map((item) => `
+    <tr>
+      <td>${item.entry_date || "-"}</td>
+      <td>${item.source_method}</td>
+      <td>${item.target_method}</td>
+      <td>${money(item.amount)}</td>
+      <td>${item.created_by_name || "-"}</td>
+      <td>${item.note || "-"}</td>
+    </tr>
+  `).join("") || `<tr><td colspan="6" class="muted">لا توجد عمليات توسيط</td></tr>`;
+}
+
+function renderUsers() {
+  const body = qs("#userRows");
+  if (!body) return;
+  body.innerHTML = state.users.map((item) => `
+    <tr>
+      <td>${item.username}</td>
+      <td>${item.display_name}</td>
+      <td>${item.role}</td>
+      <td>${item.active ? "نشط" : "موقوف"}</td>
+      <td>${item.created_at}</td>
+    </tr>
+  `).join("") || `<tr><td colspan="5" class="muted">لا توجد بيانات مستخدمين</td></tr>`;
+}
+
+function auditDetails(item) {
+  const before = safeJson(item.before_data);
+  const after = safeJson(item.after_data);
+  if (item.action === "INSERT") return `<pre>${escapeHtml(JSON.stringify(after, null, 2))}</pre>`;
+  if (item.action === "DELETE") return `<pre>${escapeHtml(JSON.stringify(before, null, 2))}</pre>`;
+  if (item.action === "UPDATE") {
+    return `<div class="audit-diff"><strong>قبل</strong><pre>${escapeHtml(JSON.stringify(before, null, 2))}</pre><strong>بعد</strong><pre>${escapeHtml(JSON.stringify(after, null, 2))}</pre></div>`;
+  }
+  return `<pre>${escapeHtml(JSON.stringify(after || before || {}, null, 2))}</pre>`;
+}
+
+function safeJson(value) {
+  if (!value) return null;
+  try { return JSON.parse(value); } catch { return value; }
+}
+
+function escapeHtml(value) {
+  return String(value ?? "").replace(/[&<>"']/g, (char) => ({
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    '"': "&quot;",
+    "'": "&#039;",
+  })[char]);
 }
 
 async function loadBootstrap() {
@@ -203,6 +266,9 @@ async function loadBootstrap() {
   state.user = data.user;
   qsa('select[name="responsible"]').forEach((select) => fillSelect(select, state.responsibles));
   qsa('select[name="payment_method"]').forEach((select) => fillSelect(select, state.paymentMethods));
+  qsa('select[name="source_method"]').forEach((select) => fillSelect(select, state.paymentMethods));
+  qsa('select[name="target_method"]').forEach((select) => fillSelect(select, state.paymentMethods));
+  qsa(".admin-only").forEach((item) => item.classList.toggle("hidden", state.user?.role !== "admin"));
   qs("#statusLine").textContent = "نسخة Cloudflare العامة";
   qs("#currentUser").textContent = state.user ? `${state.user.display_name} (${state.user.role})` : "";
 }
@@ -235,9 +301,26 @@ async function loadAudit() {
   renderAudit();
 }
 
+async function loadTransfers() {
+  const data = await api("/api/transfers");
+  state.transfers = data.items;
+  renderTransfers();
+}
+
+async function loadUsers() {
+  if (!state.user || state.user.role !== "admin") {
+    state.users = [];
+    renderUsers();
+    return;
+  }
+  const data = await api("/api/users");
+  state.users = data.items;
+  renderUsers();
+}
+
 async function reloadAll() {
   await loadBootstrap();
-  await Promise.all([loadDashboard(), loadCollections(), loadExpenses(), loadAudit()]);
+  await Promise.all([loadDashboard(), loadCollections(), loadExpenses(), loadTransfers(), loadUsers(), loadAudit()]);
 }
 
 function formData(form) {
@@ -300,6 +383,41 @@ async function saveExpense(event) {
   await Promise.all([loadDashboard(), loadExpenses(), loadAudit()]);
 }
 
+async function saveTransfer(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  await api("/api/transfers", { method: "POST", body: JSON.stringify(formData(form)) });
+  form.reset();
+  fillSelect(form.source_method, state.paymentMethods);
+  fillSelect(form.target_method, state.paymentMethods);
+  showToast("تم تنفيذ التوسيط");
+  await Promise.all([loadDashboard(), loadTransfers(), loadAudit()]);
+}
+
+async function saveUser(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  await api("/api/users", { method: "POST", body: JSON.stringify(formData(form)) });
+  form.reset();
+  showToast("تم إنشاء المستخدم");
+  await Promise.all([loadBootstrap(), loadUsers(), loadAudit()]);
+}
+
+async function downloadBackup() {
+  const data = await api("/api/backup");
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `tahsilat-backup-${stamp}.json`;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+  showToast("تم تحميل النسخة الاحتياطية");
+}
+
 function editCollection(id) {
   const item = state.collections.find((row) => String(row.id) === String(id));
   if (!item) return;
@@ -360,6 +478,10 @@ function bindEvents() {
     showToast("تم التحديث");
   });
 
+  qs("#backupBtn").addEventListener("click", () => {
+    downloadBackup().catch((error) => showToast(error.message, true));
+  });
+
   qs("#logoutBtn").addEventListener("click", async () => {
     await api("/api/logout", { method: "POST", body: "{}" });
     state.user = null;
@@ -371,9 +493,8 @@ function bindEvents() {
     try {
       await api("/api/login", { method: "POST", body: JSON.stringify(formData(event.currentTarget)) });
       event.currentTarget.reset();
-      showApp();
-      await reloadAll();
-      showToast("تم تسجيل الدخول");
+      setActiveTab("dashboard");
+      window.location.assign("/");
     } catch (error) {
       showToast(error.message, true);
     }
@@ -381,6 +502,8 @@ function bindEvents() {
 
   qs("#collectionForm").addEventListener("submit", (event) => saveCollection(event).catch((error) => showToast(error.message, true)));
   qs("#expenseForm").addEventListener("submit", (event) => saveExpense(event).catch((error) => showToast(error.message, true)));
+  qs("#transferForm").addEventListener("submit", (event) => saveTransfer(event).catch((error) => showToast(error.message, true)));
+  qs("#userForm").addEventListener("submit", (event) => saveUser(event).catch((error) => showToast(error.message, true)));
   qs("#cancelCollectionEdit").addEventListener("click", resetCollectionForm);
   qs("#cancelExpenseEdit").addEventListener("click", resetExpenseForm);
 

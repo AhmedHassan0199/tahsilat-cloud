@@ -27,6 +27,7 @@
     <div class="top-actions">
       <span id="currentUser" class="user-pill"></span>
       <button id="refreshBtn" title="تحديث البيانات" type="button">↻</button>
+      <button id="backupBtn" title="تحميل نسخة احتياطية" type="button">Backup</button>
       <button id="logoutBtn" title="خروج" type="button">خروج</button>
     </div>
   </header>
@@ -57,6 +58,8 @@
         <button class="tab" data-tab="collections" type="button">التحصيلات</button>
         <button class="tab" data-tab="expenses" type="button">المصروفات</button>
         <button class="tab" data-tab="treasury" type="button">الخزينة</button>
+        <button class="tab" data-tab="transfers" type="button">توسيط</button>
+        <button class="tab admin-only" data-tab="users" type="button">المستخدمين</button>
         <button class="tab" data-tab="audit" type="button">السجل</button>
       </nav>
 
@@ -195,7 +198,7 @@
             <div class="panel-head"><h2>رصيد الخزينة حسب طريقة الدفع</h2></div>
             <div class="table-wrap records">
               <table>
-                <thead><tr><th>طريقة الدفع</th><th>تحصيل</th><th>مصروف</th><th>الرصيد</th></tr></thead>
+                <thead><tr><th>طريقة الدفع</th><th>تحصيل</th><th>مصروف</th><th>توسيط داخل</th><th>توسيط خارج</th><th>الرصيد</th></tr></thead>
                 <tbody id="treasuryRows"></tbody>
               </table>
             </div>
@@ -209,12 +212,57 @@
         </div>
       </section>
 
+      <section id="transfers" class="tab-panel">
+        <div class="entry-layout">
+          <form id="transferForm" class="form-panel">
+            <h2>توسيط بين طرق الدفع</h2>
+            <label>التاريخ<input name="entry_date" type="date"></label>
+            <label>من طريقة دفع<select name="source_method"></select></label>
+            <label>إلى طريقة دفع<select name="target_method"></select></label>
+            <label>المبلغ<input name="amount" type="number" min="0" step="0.01" required></label>
+            <label class="wide">ملاحظة<textarea name="note" rows="2"></textarea></label>
+            <div class="form-actions"><button type="submit">تنفيذ التوسيط</button></div>
+          </form>
+          <div class="panel">
+            <div class="panel-head"><h2>سجل التوسيط</h2></div>
+            <div class="table-wrap records">
+              <table>
+                <thead><tr><th>التاريخ</th><th>من</th><th>إلى</th><th>المبلغ</th><th>المستخدم</th><th>ملاحظة</th></tr></thead>
+                <tbody id="transferRows"></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="users" class="tab-panel">
+        <div class="entry-layout">
+          <form id="userForm" class="form-panel">
+            <h2>إنشاء مستخدم</h2>
+            <label>اسم المستخدم<input name="username" required autocomplete="off"></label>
+            <label>الاسم الكامل<input name="display_name" required autocomplete="off"></label>
+            <label>كلمة المرور<input name="password" type="password" minlength="8" required></label>
+            <label>الصلاحية<select name="role"><option value="user">user</option><option value="admin">admin</option><option value="viewer">viewer</option></select></label>
+            <div class="form-actions"><button type="submit">إضافة مستخدم</button></div>
+          </form>
+          <div class="panel">
+            <div class="panel-head"><h2>المستخدمون</h2></div>
+            <div class="table-wrap records">
+              <table>
+                <thead><tr><th>اسم المستخدم</th><th>الاسم الكامل</th><th>الصلاحية</th><th>الحالة</th><th>تاريخ الإنشاء</th></tr></thead>
+                <tbody id="userRows"></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </section>
+
       <section id="audit" class="tab-panel">
         <div class="panel">
           <div class="panel-head"><h2>سجل التعديلات</h2></div>
           <div class="table-wrap records">
             <table>
-              <thead><tr><th>الوقت</th><th>الإجراء</th><th>النوع</th><th>رقم</th><th>المستخدم</th></tr></thead>
+              <thead><tr><th>الوقت</th><th>المستخدم</th><th>الإجراء</th><th>الجدول</th><th>رقم</th><th>التفاصيل</th></tr></thead>
               <tbody id="auditRows"></tbody>
             </table>
           </div>

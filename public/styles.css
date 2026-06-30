@@ -240,6 +240,28 @@ th, td {
   white-space: nowrap;
 }
 
+td details {
+  white-space: normal;
+  max-width: 520px;
+}
+
+td pre {
+  direction: ltr;
+  text-align: left;
+  white-space: pre-wrap;
+  background: #f8fafc;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 8px;
+  max-height: 240px;
+  overflow: auto;
+}
+
+.audit-diff {
+  display: grid;
+  gap: 8px;
+}
+
 th {
   background: #f8fafc;
   color: #344054;
