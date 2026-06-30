@@ -20,9 +20,10 @@ export default {
 
 async function handleApi(request, env, url) {
   const method = request.method.toUpperCase();
-  const publicRoutes = new Set(["/api/login"]);
+  const publicRoutes = new Set(["/api/login", "/api/health"]);
   const user = publicRoutes.has(url.pathname) ? null : await requireUser(request, env);
 
+  if (url.pathname === "/api/health" && method === "GET") return health(env);
   if (url.pathname === "/api/login" && method === "POST") return login(request, env);
   if (url.pathname === "/api/logout" && method === "POST") return logout(request, env, user);
   if (url.pathname === "/api/me" && method === "GET") return json({ user });
@@ -48,6 +49,16 @@ async function handleApi(request, env, url) {
   if (url.pathname === "/api/users" && method === "GET") return users(env, user);
   if (url.pathname === "/api/users" && method === "POST") return createUser(request, env, user);
   return json({ error: "Not found" }, 404);
+}
+
+async function health(env) {
+  const checks = {};
+  checks.users = await env.DB.prepare("SELECT COUNT(*) AS count FROM users").first();
+  checks.sessions = await env.DB.prepare("SELECT COUNT(*) AS count FROM sessions").first();
+  checks.collections = await env.DB.prepare("SELECT COUNT(*) AS count FROM collections").first();
+  checks.payment_methods = await env.DB.prepare("SELECT COUNT(*) AS count FROM payment_methods").first();
+  checks.admin = await env.DB.prepare("SELECT id, username, role, active FROM users WHERE username = 'admin'").first();
+  return json({ ok: true, checks });
 }
 
 function json(data, status = 200, extraHeaders = {}) {
