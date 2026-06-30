@@ -1,0 +1,230 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>نظام التحصيلات والمصروفات</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <section id="loginScreen" class="login-screen">
+    <form id="loginForm" class="login-card">
+      <h1>نظام التحصيلات والمصروفات</h1>
+      <p>تسجيل الدخول</p>
+      <label>اسم المستخدم<input name="username" autocomplete="username" required></label>
+      <label>كلمة المرور<input name="password" type="password" autocomplete="current-password" required></label>
+      <button type="submit">دخول</button>
+      <small>الدخول متاح للمستخدمين المسجلين فقط.</small>
+    </form>
+  </section>
+
+  <div id="appShell" class="app-shell hidden">
+  <header class="topbar">
+    <div>
+      <h1>نظام التحصيلات والمصروفات</h1>
+      <p id="statusLine">جاري التحميل...</p>
+    </div>
+    <div class="top-actions">
+      <span id="currentUser" class="user-pill"></span>
+      <button id="refreshBtn" title="تحديث البيانات" type="button">↻</button>
+      <button id="logoutBtn" title="خروج" type="button">خروج</button>
+    </div>
+  </header>
+
+  <main>
+    <section class="metrics" aria-label="المؤشرات الرئيسية">
+      <div class="metric">
+        <span>إجمالي التحصيل</span>
+        <strong id="totalCollections">0</strong>
+      </div>
+      <div class="metric">
+        <span>إجمالي المصروفات</span>
+        <strong id="totalExpenses">0</strong>
+      </div>
+      <div class="metric accent">
+        <span>رصيد الخزينة</span>
+        <strong id="treasuryBalance">0</strong>
+      </div>
+      <div class="metric">
+        <span>عدد العمليات</span>
+        <strong id="operationCount">0</strong>
+      </div>
+    </section>
+
+    <section class="workbench">
+      <nav class="tabs" aria-label="الأقسام">
+        <button class="tab active" data-tab="dashboard" type="button">Dashboard</button>
+        <button class="tab" data-tab="collections" type="button">التحصيلات</button>
+        <button class="tab" data-tab="expenses" type="button">المصروفات</button>
+        <button class="tab" data-tab="treasury" type="button">الخزينة</button>
+        <button class="tab" data-tab="audit" type="button">السجل</button>
+      </nav>
+
+      <section id="dashboard" class="tab-panel active">
+        <div class="grid two">
+          <div class="panel">
+            <div class="panel-head">
+              <h2>مقارنة الشهور</h2>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr><th>الشهر</th><th>التحصيل</th><th>المصروفات</th><th>الصافي</th></tr>
+                </thead>
+                <tbody id="monthRows"></tbody>
+              </table>
+            </div>
+          </div>
+          <div class="panel">
+            <div class="panel-head">
+              <h2>أهم الرؤى</h2>
+            </div>
+            <dl class="insights">
+              <div><dt>أفضل شهر</dt><dd id="bestMonth">-</dd></div>
+              <div><dt>أفضل يوم</dt><dd id="bestDay">-</dd></div>
+              <div><dt>أفضل مسؤول</dt><dd id="bestResponsible">-</dd></div>
+              <div><dt>أكبر عميل</dt><dd id="largestClient">-</dd></div>
+            </dl>
+          </div>
+        </div>
+
+        <div class="grid two">
+          <div class="panel">
+            <div class="panel-head">
+              <h2>المسؤولون</h2>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>المسؤول</th><th>الإجمالي</th><th>عدد التحصيلات</th></tr></thead>
+                <tbody id="responsibleRows"></tbody>
+              </table>
+            </div>
+          </div>
+          <div class="panel">
+            <div class="panel-head">
+              <h2>أكبر العملاء</h2>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>العميل</th><th>الإجمالي</th><th>عدد العمليات</th></tr></thead>
+                <tbody id="clientRows"></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="collections" class="tab-panel">
+        <div class="entry-layout">
+          <form id="collectionForm" class="form-panel">
+            <h2 id="collectionFormTitle">إضافة تحصيل</h2>
+            <input type="hidden" name="id">
+            <label>التاريخ<input name="entry_date" type="date"></label>
+            <label>الشهر<input name="month" type="number" min="1" max="12" placeholder="يحسب من التاريخ"></label>
+            <label>المسؤول<select name="responsible"></select></label>
+            <label>العميل<input name="client_name" required autocomplete="off"></label>
+            <label>المبلغ<input name="amount" type="number" min="0" step="0.01" required></label>
+            <label>طريقة التحصيل<select name="payment_method"></select></label>
+            <label class="wide">ملاحظة<textarea name="note" rows="2"></textarea></label>
+            <div class="form-actions">
+              <button type="submit">حفظ</button>
+              <button type="button" class="secondary" id="cancelCollectionEdit">إلغاء</button>
+            </div>
+          </form>
+          <div class="panel">
+            <div class="panel-head">
+              <h2>سجل التحصيلات</h2>
+              <div class="filters">
+                <input id="collectionSearch" placeholder="بحث بالعميل أو الملاحظة">
+                <select id="collectionMonth"><option value="">كل الشهور</option></select>
+              </div>
+            </div>
+            <div class="table-wrap records">
+              <table>
+                <thead>
+                  <tr><th>التاريخ</th><th>الشهر</th><th>المسؤول</th><th>العميل</th><th>المبلغ</th><th>الطريقة</th><th></th></tr>
+                </thead>
+                <tbody id="collectionRows"></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="expenses" class="tab-panel">
+        <div class="entry-layout">
+          <form id="expenseForm" class="form-panel">
+            <h2 id="expenseFormTitle">إضافة مصروف</h2>
+            <input type="hidden" name="id">
+            <label>التاريخ<input name="entry_date" type="date"></label>
+            <label>الشهر<input name="month" type="number" min="1" max="12" placeholder="يحسب من التاريخ"></label>
+            <label>النوع<select name="expense_type"><option>مصروف</option><option>مدفوعات</option></select></label>
+            <label>وجه الصرف<input name="description" required autocomplete="off"></label>
+            <label>المبلغ<input name="amount" type="number" min="0" step="0.01" required></label>
+            <label>طريقة الدفع<select name="payment_method"></select></label>
+            <label class="check"><input name="deducted_from_treasury" type="checkbox" checked> مخصوم من الخزينة</label>
+            <label class="wide">ملاحظة<textarea name="note" rows="2"></textarea></label>
+            <div class="form-actions">
+              <button type="submit">حفظ</button>
+              <button type="button" class="secondary" id="cancelExpenseEdit">إلغاء</button>
+            </div>
+          </form>
+          <div class="panel">
+            <div class="panel-head">
+              <h2>سجل المصروفات</h2>
+              <div class="filters">
+                <input id="expenseSearch" placeholder="بحث بوجه الصرف أو الملاحظة">
+                <select id="expenseMonth"><option value="">كل الشهور</option></select>
+              </div>
+            </div>
+            <div class="table-wrap records">
+              <table>
+                <thead>
+                  <tr><th>التاريخ</th><th>الشهر</th><th>النوع</th><th>وجه الصرف</th><th>المبلغ</th><th>الطريقة</th><th>الخزينة</th><th></th></tr>
+                </thead>
+                <tbody id="expenseRows"></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="treasury" class="tab-panel">
+        <div class="grid two">
+          <div class="panel">
+            <div class="panel-head"><h2>رصيد الخزينة حسب طريقة الدفع</h2></div>
+            <div class="table-wrap records">
+              <table>
+                <thead><tr><th>طريقة الدفع</th><th>تحصيل</th><th>مصروف</th><th>الرصيد</th></tr></thead>
+                <tbody id="treasuryRows"></tbody>
+              </table>
+            </div>
+          </div>
+          <form id="methodForm" class="form-panel compact">
+            <h2>إضافة طريقة دفع</h2>
+            <label>الاسم<input name="name" required></label>
+            <label>ملاحظة<input name="note"></label>
+            <div class="form-actions"><button type="submit">إضافة</button></div>
+          </form>
+        </div>
+      </section>
+
+      <section id="audit" class="tab-panel">
+        <div class="panel">
+          <div class="panel-head"><h2>سجل التعديلات</h2></div>
+          <div class="table-wrap records">
+            <table>
+              <thead><tr><th>الوقت</th><th>الإجراء</th><th>النوع</th><th>رقم</th><th>المستخدم</th></tr></thead>
+              <tbody id="auditRows"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+    </section>
+  </main>
+
+  <div id="toast" role="status" aria-live="polite"></div>
+  </div>
+  <script src="/app.js"></script>
+</body>
+</html>
