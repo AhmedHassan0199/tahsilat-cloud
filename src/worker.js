@@ -1,5 +1,6 @@
 const SESSION_COOKIE = "tahsilat_session";
 const SESSION_DAYS = 7;
+const PASSWORD_ITERATIONS = 20000;
 const JSON_HEADERS = { "content-type": "application/json; charset=utf-8" };
 
 const RESPONSIBLES = ["نورا", "محمد حسن", "المصريه"];
@@ -129,25 +130,30 @@ async function requireUser(request, env) {
 }
 
 async function login(request, env) {
-  const payload = await readJson(request);
-  const username = String(payload.username || "").trim().toLowerCase();
-  const password = String(payload.password || "");
-  if (!username || !password) return json({ error: "اسم المستخدم وكلمة المرور مطلوبان" }, 400);
-  const user = await env.DB.prepare("SELECT * FROM users WHERE username = ? AND active = 1").bind(username).first();
-  if (!user || !(await verifyPassword(password, user.password_hash))) {
-    return json({ error: "بيانات الدخول غير صحيحة" }, 401);
+  try {
+    const payload = await readJson(request);
+    const username = String(payload.username || "").trim().toLowerCase();
+    const password = String(payload.password || "");
+    if (!username || !password) return json({ error: "اسم المستخدم وكلمة المرور مطلوبان" }, 400);
+    const user = await env.DB.prepare("SELECT * FROM users WHERE username = ? AND active = 1").bind(username).first();
+    if (!user || !(await verifyPassword(password, user.password_hash))) {
+      return json({ error: "بيانات الدخول غير صحيحة" }, 401);
+    }
+    const token = crypto.randomUUID() + "." + crypto.randomUUID();
+    const expires = new Date(Date.now() + SESSION_DAYS * 24 * 60 * 60 * 1000).toISOString();
+    await env.DB.prepare("INSERT INTO sessions(token, user_id, expires_at, created_at) VALUES(?, ?, ?, ?)")
+      .bind(token, user.id, expires, nowIso())
+      .run();
+    await insertAudit(env, request, user, "LOGIN", "sessions", null, null, { username });
+    return json(
+      { user: publicUser(user) },
+      200,
+      { "set-cookie": cookieHeader(SESSION_COOKIE, token, { maxAge: SESSION_DAYS * 24 * 60 * 60 }) }
+    );
+  } catch (error) {
+    console.error("login_failed", error?.stack || error?.message || error);
+    throw error;
   }
-  const token = crypto.randomUUID() + "." + crypto.randomUUID();
-  const expires = new Date(Date.now() + SESSION_DAYS * 24 * 60 * 60 * 1000).toISOString();
-  await env.DB.prepare("INSERT INTO sessions(token, user_id, expires_at, created_at) VALUES(?, ?, ?, ?)")
-    .bind(token, user.id, expires, nowIso())
-    .run();
-  await insertAudit(env, request, user, "LOGIN", "sessions", null, null, { username });
-  return json(
-    { user: publicUser(user) },
-    200,
-    { "set-cookie": cookieHeader(SESSION_COOKIE, token, { maxAge: SESSION_DAYS * 24 * 60 * 60 }) }
-  );
 }
 
 async function logout(request, env, user) {
@@ -473,7 +479,7 @@ async function insertAudit(env, request, user, action, tableName, recordId, befo
 async function hashPassword(password) {
   const salt = crypto.getRandomValues(new Uint8Array(16));
   const hash = await pbkdf2(password, salt);
-  return `pbkdf2$120000$${toBase64(salt)}$${toBase64(hash)}`;
+  return `pbkdf2$${PASSWORD_ITERATIONS}$${toBase64(salt)}$${toBase64(hash)}`;
 }
 
 async function verifyPassword(password, encoded) {
@@ -486,7 +492,7 @@ async function verifyPassword(password, encoded) {
   return timingSafeEqual(actual, expected);
 }
 
-async function pbkdf2(password, salt, iterations = 120000) {
+async function pbkdf2(password, salt, iterations = PASSWORD_ITERATIONS) {
   const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(password), "PBKDF2", false, ["deriveBits"]);
   const bits = await crypto.subtle.deriveBits(
     { name: "PBKDF2", hash: "SHA-256", salt, iterations },

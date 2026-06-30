@@ -7,6 +7,7 @@ if (!password || password.length < 8) {
 }
 
 const crypto = webcrypto;
+const iterations = Number(process.argv[3] || 20000);
 const salt = crypto.getRandomValues(new Uint8Array(16));
 const key = await crypto.subtle.importKey(
   "raw",
@@ -16,7 +17,7 @@ const key = await crypto.subtle.importKey(
   ["deriveBits"]
 );
 const bits = await crypto.subtle.deriveBits(
-  { name: "PBKDF2", hash: "SHA-256", salt, iterations: 120000 },
+  { name: "PBKDF2", hash: "SHA-256", salt, iterations },
   key,
   256
 );
@@ -25,4 +26,4 @@ function b64(bytes) {
   return Buffer.from(bytes).toString("base64");
 }
 
-console.log(`pbkdf2$120000$${b64(salt)}$${b64(new Uint8Array(bits))}`);
+console.log(`pbkdf2$${iterations}$${b64(salt)}$${b64(new Uint8Array(bits))}`);
