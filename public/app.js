@@ -36,10 +36,11 @@ function showToast(message, isError = false) {
 async function api(path, options = {}) {
   const response = await fetch(path, {
     headers: { "Content-Type": "application/json" },
+    credentials: "same-origin",
     ...options,
   });
   const data = await response.json().catch(() => ({}));
-  if (response.status === 401) {
+  if (response.status === 401 && path !== "/api/login") {
     showLogin();
     throw new Error("انتهت الجلسة، برجاء تسجيل الدخول");
   }
@@ -494,7 +495,11 @@ function bindEvents() {
       await api("/api/login", { method: "POST", body: JSON.stringify(formData(event.currentTarget)) });
       event.currentTarget.reset();
       setActiveTab("dashboard");
-      window.location.assign("/");
+      await reloadAll();
+      resetCollectionForm();
+      resetExpenseForm();
+      showApp();
+      showToast("تم تسجيل الدخول");
     } catch (error) {
       showToast(error.message, true);
     }
