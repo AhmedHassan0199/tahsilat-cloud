@@ -4,6 +4,7 @@ const PASSWORD_ITERATIONS = 20000;
 const JSON_HEADERS = { "content-type": "application/json; charset=utf-8" };
 
 const RESPONSIBLES = ["نورا", "محمد حسن", "المصريه"];
+const COLLECTION_TYPES = ["كرومو", "منتج تام علب", "منتج تام اكواب", "قص", "طباعة", "دشت", "أخرى"];
 const CRC32_TABLE = Array.from({ length: 256 }, (_, index) => {
   let value = index;
   for (let bit = 0; bit < 8; bit += 1) {
@@ -239,6 +240,7 @@ async function bootstrap(env, user) {
     expense_accounts: expenseAccounts.results,
     users: users.results,
     responsibles: RESPONSIBLES,
+    collection_types: COLLECTION_TYPES,
     user,
   });
 }
@@ -334,11 +336,16 @@ async function methodBalance(env, method) {
 function collectionData(payload) {
   const entryDate = parseDateValue(payload.entry_date);
   const month = payload.month ? Number(payload.month) : monthFromDate(entryDate);
+  const selectedType = String(payload.collection_type || "").trim();
+  const otherType = String(payload.collection_type_other || "").trim();
+  const collectionType = selectedType === "أخرى" ? otherType : selectedType;
   return {
     entry_date: entryDate,
     month,
     responsible: String(payload.responsible || "").trim(),
     client_name: String(payload.client_name || "").trim(),
+    collection_type: collectionType || null,
+    collection_type_other: selectedType === "أخرى" ? otherType || null : null,
     amount: Number(payload.amount || 0),
     payment_method: String(payload.payment_method || "غير محدد").trim(),
     note: String(payload.note || "").trim() || null,
@@ -367,6 +374,7 @@ function expenseData(payload) {
 function validateCollection(data) {
   if (!data.responsible) throw new HttpError("المسؤول مطلوب", 400);
   if (!data.client_name) throw new HttpError("اسم العميل مطلوب", 400);
+  if (!data.collection_type) throw new HttpError("نوع التحصيل مطلوب", 400);
   if (!Number.isFinite(data.amount) || data.amount <= 0) throw new HttpError("قيمة التحصيل يجب أن تكون أكبر من صفر", 400);
 }
 
@@ -405,8 +413,8 @@ function filters(url, kind) {
     binds.push(method);
   }
   if (q && kind === "collections") {
-    clauses.push("(client_name LIKE ? OR note LIKE ?)");
-    binds.push(`%${q}%`, `%${q}%`);
+    clauses.push("(client_name LIKE ? OR collection_type LIKE ? OR note LIKE ?)");
+    binds.push(`%${q}%`, `%${q}%`, `%${q}%`);
   }
   if (q && kind === "expenses") {
     clauses.push("(description LIKE ? OR note LIKE ?)");
@@ -432,9 +440,9 @@ async function createCollection(request, env, user) {
   validateCollection(data);
   const now = nowIso();
   const result = await env.DB.prepare(
-    `INSERT INTO collections(entry_date, month, responsible, client_name, amount, payment_method, note, created_at, updated_at)
-     VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)`
-  ).bind(data.entry_date, data.month, data.responsible, data.client_name, data.amount, data.payment_method, data.note, now, now).run();
+    `INSERT INTO collections(entry_date, month, responsible, client_name, collection_type, collection_type_other, amount, payment_method, note, created_at, updated_at)
+     VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).bind(data.entry_date, data.month, data.responsible, data.client_name, data.collection_type, data.collection_type_other, data.amount, data.payment_method, data.note, now, now).run();
   await insertAudit(env, request, user, "INSERT", "collections", result.meta.last_row_id, null, data);
   return json({ id: result.meta.last_row_id });
 }
@@ -447,9 +455,9 @@ async function updateCollection(request, env, user, id) {
   validateCollection(data);
   await env.DB.prepare(
     `UPDATE collections
-     SET entry_date=?, month=?, responsible=?, client_name=?, amount=?, payment_method=?, note=?, updated_at=?
+     SET entry_date=?, month=?, responsible=?, client_name=?, collection_type=?, collection_type_other=?, amount=?, payment_method=?, note=?, updated_at=?
      WHERE id=?`
-  ).bind(data.entry_date, data.month, data.responsible, data.client_name, data.amount, data.payment_method, data.note, nowIso(), id).run();
+  ).bind(data.entry_date, data.month, data.responsible, data.client_name, data.collection_type, data.collection_type_other, data.amount, data.payment_method, data.note, nowIso(), id).run();
   await insertAudit(env, request, user, "UPDATE", "collections", id, before, data);
   return json({ ok: true });
 }

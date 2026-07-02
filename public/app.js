@@ -1,6 +1,7 @@
 const state = {
   paymentMethods: [],
   expenseAccounts: [],
+  collectionTypes: [],
   responsibles: [],
   dashboard: null,
   collections: [],
@@ -134,6 +135,14 @@ function fillExpenseReportCodes() {
   });
 }
 
+function toggleCollectionOtherType() {
+  const form = qs("#collectionForm");
+  const isOther = form.collection_type.value === "أخرى";
+  qs("#collectionTypeOtherWrap").classList.toggle("hidden", !isOther);
+  form.collection_type_other.required = isOther;
+  if (!isOther) form.collection_type_other.value = "";
+}
+
 function addMonthOptions() {
   ["#collectionMonth", "#expenseMonth"].forEach((id) => {
     const select = qs(id);
@@ -224,6 +233,7 @@ function renderCollections() {
       <td data-label="الشهر">${item.month || "-"}</td>
       <td data-label="المسؤول">${item.responsible}</td>
       <td data-label="العميل">${item.client_name}</td>
+      <td data-label="نوع التحصيل">${item.collection_type || "-"}</td>
       <td data-label="المبلغ">${money(item.amount)}</td>
       <td data-label="الطريقة">${item.payment_method}</td>
       <td class="actions">
@@ -231,7 +241,7 @@ function renderCollections() {
         <button class="danger" type="button" data-delete-collection="${item.id}" title="حذف">×</button>
       </td>
     </tr>
-  `).join("") || `<tr><td colspan="7" class="muted">لا توجد تحصيلات مطابقة</td></tr>`;
+  `).join("") || `<tr><td colspan="8" class="muted">لا توجد تحصيلات مطابقة</td></tr>`;
 }
 
 function renderExpenses() {
@@ -355,9 +365,11 @@ async function loadBootstrap() {
   const data = await api("/api/bootstrap");
   state.paymentMethods = data.payment_methods;
   state.expenseAccounts = data.expense_accounts || [];
+  state.collectionTypes = data.collection_types || [];
   state.responsibles = data.responsibles;
   state.user = data.user;
   qsa('select[name="responsible"]').forEach((select) => fillSelect(select, state.responsibles));
+  qsa('select[name="collection_type"]').forEach((select) => fillSelect(select, state.collectionTypes, select.value));
   qsa('select[name="payment_method"]').forEach((select) => fillSelect(select, state.paymentMethods));
   qsa('select[name="expense_account_id"]').forEach((select) => fillExpenseAccountSelect(select, select.value));
   fillExpenseReportCodes();
@@ -457,7 +469,9 @@ function resetCollectionForm() {
   form.elements.id.value = "";
   qs("#collectionFormTitle").textContent = "إضافة تحصيل";
   fillSelect(form.responsible, state.responsibles);
+  fillSelect(form.collection_type, state.collectionTypes);
   fillSelect(form.payment_method, state.paymentMethods);
+  toggleCollectionOtherType();
 }
 
 function resetExpenseForm() {
@@ -554,6 +568,14 @@ function editCollection(id) {
   form.month.value = item.month || "";
   form.responsible.value = item.responsible;
   form.client_name.value = item.client_name;
+  if (state.collectionTypes.includes(item.collection_type)) {
+    form.collection_type.value = item.collection_type;
+    form.collection_type_other.value = "";
+  } else {
+    form.collection_type.value = "أخرى";
+    form.collection_type_other.value = item.collection_type || "";
+  }
+  toggleCollectionOtherType();
   form.amount.value = item.amount;
   form.payment_method.value = item.payment_method;
   form.note.value = item.note || "";
@@ -690,6 +712,7 @@ function bindEvents() {
 
   qs("#collectionSearch").addEventListener("input", debounce(loadCollections, 250));
   qs("#collectionMonth").addEventListener("change", loadCollections);
+  qs('#collectionForm select[name="collection_type"]').addEventListener("change", toggleCollectionOtherType);
   qs("#expenseSearch").addEventListener("input", debounce(loadExpenses, 250));
   qs("#expenseMonth").addEventListener("change", loadExpenses);
 
