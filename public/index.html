@@ -214,13 +214,23 @@
       </section>
 
       <section id="reports" class="tab-panel">
-        <div class="grid two">
+        <div class="report-tabs">
+          <button class="report-tab active" data-report-tab="expenseReportPanel" type="button">تقرير المصروفات</button>
+          <button class="report-tab" data-report-tab="monthlyResponsiblePanel" type="button">تحصيل كل مسؤول</button>
+        </div>
+        <div id="expenseReportPanel" class="report-panel active">
           <div class="panel">
             <div class="panel-head">
               <h2>تقرير المصروفات</h2>
               <div class="filters">
                 <input id="expenseReportFrom" type="date">
                 <input id="expenseReportTo" type="date">
+                <select id="expenseReportType">
+                  <option value="">كل الأنواع</option>
+                  <option value="مصروفات التشغيل">تشغيل</option>
+                  <option value="مصروفات عامة">عامة</option>
+                </select>
+                <select id="expenseReportCodes" multiple size="4"></select>
                 <button id="loadExpenseReportBtn" type="button">عرض</button>
                 <button id="exportExpenseReportBtn" type="button">Excel</button>
               </div>
@@ -232,6 +242,8 @@
               </table>
             </div>
           </div>
+        </div>
+        <div id="monthlyResponsiblePanel" class="report-panel">
           <div class="panel">
             <div class="panel-head"><h2>تحصيل كل مسؤول شهريًا</h2></div>
             <div class="table-wrap records">

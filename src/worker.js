@@ -518,12 +518,25 @@ function reportDates(url) {
 
 async function expenseReportData(env, url) {
   const { dateFrom, dateTo } = reportDates(url);
+  const category = String(url.searchParams.get("expense_type") || "").trim();
+  const codes = url.searchParams.getAll("code").map((code) => String(code || "").trim()).filter(Boolean);
+  const filters = ["COALESCE(entry_date, '') >= ?", "COALESCE(entry_date, '') <= ?"];
+  const binds = [dateFrom, dateTo];
+  if (category) {
+    filters.push("expense_category = ?");
+    binds.push(category);
+  }
+  if (codes.length) {
+    filters.push(`expense_code IN (${codes.map(() => "?").join(",")})`);
+    binds.push(...codes);
+  }
+  const whereSql = filters.join(" AND ");
   const items = await env.DB.prepare(
     `SELECT id, entry_date, month, expense_type, expense_category, expense_code, expense_name, description, amount, payment_method, deducted_from_treasury, note
      FROM expenses
-     WHERE COALESCE(entry_date, '') >= ? AND COALESCE(entry_date, '') <= ?
+     WHERE ${whereSql}
      ORDER BY entry_date, id`
-  ).bind(dateFrom, dateTo).all();
+  ).bind(...binds).all();
   const totals = await env.DB.prepare(
     `SELECT COALESCE(expense_category, 'غير محدد') AS expense_category,
             COALESCE(expense_code, '') AS expense_code,
@@ -531,12 +544,12 @@ async function expenseReportData(env, url) {
             SUM(amount) AS total,
             COUNT(*) AS count
      FROM expenses
-     WHERE COALESCE(entry_date, '') >= ? AND COALESCE(entry_date, '') <= ?
+     WHERE ${whereSql}
      GROUP BY expense_category, expense_code, expense_name
      ORDER BY expense_category, CAST(expense_code AS INTEGER), expense_name`
-  ).bind(dateFrom, dateTo).all();
+  ).bind(...binds).all();
   const totalAmount = items.results.reduce((sum, row) => sum + Number(row.amount || 0), 0);
-  return { date_from: dateFrom, date_to: dateTo, total: totalAmount, items: items.results, totals: totals.results };
+  return { date_from: dateFrom, date_to: dateTo, expense_type: category, codes, total: totalAmount, items: items.results, totals: totals.results };
 }
 
 async function expenseReport(env, url) {
@@ -545,34 +558,7 @@ async function expenseReport(env, url) {
 
 async function expenseReportExcel(env, url) {
   const data = await expenseReportData(env, url);
-  const rows = [
-    ["تقرير المصروفات", "", "", "", "", "", "", ""],
-    ["من", data.date_from, "إلى", data.date_to, "الإجمالي", data.total, "", ""],
-    [],
-    ["التاريخ", "الشهر", "النوع", "التصنيف", "رقم المصروف", "اسم المصروف", "المبلغ", "طريقة الدفع"],
-    ...data.items.map((item) => [
-      item.entry_date || "",
-      item.month || "",
-      item.expense_type || "",
-      item.expense_category || "",
-      item.expense_code || "",
-      item.expense_name || item.description || "",
-      item.amount || 0,
-      item.payment_method || "",
-    ]),
-    [],
-    ["إجماليات حسب وجه الصرف", "", "", "", "", "", "", ""],
-    ["التصنيف", "رقم المصروف", "اسم المصروف", "الإجمالي", "عدد العمليات", "", "", ""],
-    ...data.totals.map((item) => [
-      item.expense_category || "",
-      item.expense_code || "",
-      item.expense_name || "",
-      item.total || 0,
-      item.count || 0,
-      "", "", "",
-    ]),
-  ];
-  const xml = excelXml(rows);
+  const xml = expenseExcelXml(data);
   return new Response(xml, {
     headers: {
       "content-type": "application/vnd.ms-excel; charset=utf-8",
@@ -593,6 +579,82 @@ async function responsibleMonthlyReport(env) {
      ORDER BY m`
   ).all();
   return json({ items: result.results });
+}
+
+function expenseExcelXml(data) {
+  const groups = new Map();
+  data.totals.forEach((item) => {
+    const category = item.expense_category || "غير محدد";
+    if (!groups.has(category)) groups.set(category, []);
+    groups.get(category).push(item);
+  });
+  const period = `${data.date_from === "0000-01-01" ? "البداية" : data.date_from} - ${data.date_to === "9999-12-31" ? "النهاية" : data.date_to}`;
+  const typeLabel = data.expense_type || "كل الأنواع";
+  const selectedCodes = data.codes.length ? data.codes.join("، ") : "كل الأكواد";
+  const rows = [
+    excelRow(["تقرير المصروفات", "", "", ""], "Title", 4),
+    excelRow(["الفترة", period, "النوع", typeLabel], "Meta"),
+    excelRow(["الأكواد", selectedCodes, "الإجمالي", data.total], "Meta"),
+    excelRow(["", "", "", ""], "Normal"),
+  ];
+
+  groups.forEach((items, category) => {
+    const categoryTotal = items.reduce((sum, item) => sum + Number(item.total || 0), 0);
+    rows.push(excelRow([category, "", "", ""], "Section", 4));
+    rows.push(excelRow(["رقم المصروف", "اسم المصروف", "عدد العمليات", "القيمة"], "Header"));
+    items.forEach((item) => {
+      rows.push(excelRow([
+        item.expense_code || "",
+        item.expense_name || "",
+        item.count || 0,
+        item.total || 0,
+      ], "Normal"));
+    });
+    rows.push(excelRow(["", "إجمالي", "", categoryTotal], "Total"));
+    rows.push(excelRow(["", "", "", ""], "Normal"));
+  });
+
+  if (!groups.size) {
+    rows.push(excelRow(["لا توجد مصروفات مطابقة للفلاتر", "", "", ""], "Normal", 4));
+  }
+
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<?mso-application progid="Excel.Sheet"?>
+<Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet"
+ xmlns:o="urn:schemas-microsoft-com:office:office"
+ xmlns:x="urn:schemas-microsoft-com:office:excel"
+ xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet">
+ <Styles>
+  <Style ss:ID="Title"><Alignment ss:Horizontal="Center"/><Font ss:Bold="1" ss:Size="16"/><Interior ss:Color="#D9EAF7" ss:Pattern="Solid"/><Borders>${excelBorders()}</Borders></Style>
+  <Style ss:ID="Section"><Alignment ss:Horizontal="Center"/><Font ss:Bold="1" ss:Size="13"/><Interior ss:Color="#E2F0D9" ss:Pattern="Solid"/><Borders>${excelBorders()}</Borders></Style>
+  <Style ss:ID="Header"><Alignment ss:Horizontal="Center"/><Font ss:Bold="1"/><Interior ss:Color="#F2F2F2" ss:Pattern="Solid"/><Borders>${excelBorders()}</Borders></Style>
+  <Style ss:ID="Meta"><Alignment ss:Horizontal="Center"/><Font ss:Bold="1"/><Borders>${excelBorders()}</Borders></Style>
+  <Style ss:ID="Total"><Alignment ss:Horizontal="Center"/><Font ss:Bold="1"/><Interior ss:Color="#FFF2CC" ss:Pattern="Solid"/><Borders>${excelBorders()}</Borders></Style>
+  <Style ss:ID="Normal"><Alignment ss:Horizontal="Center"/><Borders>${excelBorders()}</Borders></Style>
+ </Styles>
+ <Worksheet ss:Name="تقرير المصروفات" ss:RightToLeft="1">
+  <Table>
+   <Column ss:Width="95"/>
+   <Column ss:Width="260"/>
+   <Column ss:Width="95"/>
+   <Column ss:Width="110"/>
+${rows.join("\n")}
+  </Table>
+ </Worksheet>
+</Workbook>`;
+}
+
+function excelRow(cells, style = "Normal", mergeAcross = 0) {
+  if (mergeAcross > 1) {
+    return `   <Row><Cell ss:StyleID="${style}" ss:MergeAcross="${mergeAcross - 1}"><Data ss:Type="${typeof cells[0] === "number" ? "Number" : "String"}">${xmlEscape(cells[0])}</Data></Cell></Row>`;
+  }
+  return `   <Row>${cells.map((cell, index) => {
+    return `<Cell ss:StyleID="${style}"><Data ss:Type="${typeof cell === "number" ? "Number" : "String"}">${xmlEscape(cell)}</Data></Cell>`;
+  }).join("")}</Row>`;
+}
+
+function excelBorders() {
+  return `<Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#A6A6A6"/><Border ss:Position="Left" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#A6A6A6"/><Border ss:Position="Right" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#A6A6A6"/><Border ss:Position="Top" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#A6A6A6"/>`;
 }
 
 function excelXml(rows) {

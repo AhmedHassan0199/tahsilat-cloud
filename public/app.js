@@ -118,6 +118,22 @@ function fillExpenseAccountSelect(select, current = "") {
   if (current) select.value = current;
 }
 
+function fillExpenseReportCodes() {
+  const select = qs("#expenseReportCodes");
+  if (!select) return;
+  const selected = new Set(qsa("option:checked", select).map((option) => option.value));
+  const type = qs("#expenseReportType")?.value || "";
+  const accounts = state.expenseAccounts.filter((item) => !type || item.category === type);
+  select.innerHTML = "";
+  accounts.forEach((item) => {
+    const option = document.createElement("option");
+    option.value = item.code;
+    option.textContent = `${item.code} - ${item.name}`;
+    option.selected = selected.has(item.code);
+    select.appendChild(option);
+  });
+}
+
 function addMonthOptions() {
   ["#collectionMonth", "#expenseMonth"].forEach((id) => {
     const select = qs(id);
@@ -340,6 +356,7 @@ async function loadBootstrap() {
   qsa('select[name="responsible"]').forEach((select) => fillSelect(select, state.responsibles));
   qsa('select[name="payment_method"]').forEach((select) => fillSelect(select, state.paymentMethods));
   qsa('select[name="expense_account_id"]').forEach((select) => fillExpenseAccountSelect(select, select.value));
+  fillExpenseReportCodes();
   qsa('select[name="source_method"]').forEach((select) => fillSelect(select, state.paymentMethods));
   qsa('select[name="target_method"]').forEach((select) => fillSelect(select, state.paymentMethods));
   qsa(".admin-only").forEach((item) => item.classList.toggle("hidden", state.user?.role !== "admin"));
@@ -393,13 +410,22 @@ async function loadUsers() {
 }
 
 async function loadExpenseReport() {
+  const params = expenseReportParams();
+  state.expenseReport = await api(`/api/reports/expenses?${params.toString()}`);
+  renderExpenseReport();
+}
+
+function expenseReportParams() {
   const params = new URLSearchParams();
   const from = qs("#expenseReportFrom")?.value;
   const to = qs("#expenseReportTo")?.value;
+  const type = qs("#expenseReportType")?.value;
+  const codes = qsa("#expenseReportCodes option:checked").map((option) => option.value);
   if (from) params.set("date_from", from);
   if (to) params.set("date_to", to);
-  state.expenseReport = await api(`/api/reports/expenses?${params.toString()}`);
-  renderExpenseReport();
+  if (type) params.set("expense_type", type);
+  codes.forEach((code) => params.append("code", code));
+  return params;
 }
 
 async function loadResponsibleMonthly() {
@@ -564,6 +590,15 @@ function bindEvents() {
     });
   });
 
+  qsa(".report-tab").forEach((tab) => {
+    tab.addEventListener("click", () => {
+      qsa(".report-tab").forEach((item) => item.classList.remove("active"));
+      qsa(".report-panel").forEach((item) => item.classList.remove("active"));
+      tab.classList.add("active");
+      qs(`#${tab.dataset.reportTab}`).classList.add("active");
+    });
+  });
+
   qs("#refreshBtn").addEventListener("click", async () => {
     await reloadAll();
     showToast("تم التحديث");
@@ -577,12 +612,12 @@ function bindEvents() {
     loadExpenseReport().catch((error) => showToast(error.message, true));
   });
 
+  qs("#expenseReportType").addEventListener("change", () => {
+    fillExpenseReportCodes();
+  });
+
   qs("#exportExpenseReportBtn").addEventListener("click", () => {
-    const params = new URLSearchParams();
-    const from = qs("#expenseReportFrom").value;
-    const to = qs("#expenseReportTo").value;
-    if (from) params.set("date_from", from);
-    if (to) params.set("date_to", to);
+    const params = expenseReportParams();
     window.location.href = `/api/reports/expenses.xls?${params.toString()}`;
   });
 
