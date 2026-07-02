@@ -61,6 +61,8 @@ async function handleApi(request, env, url) {
   if (url.pathname === "/api/expense-accounts" && method === "GET") return expenseAccounts(env);
   if (url.pathname === "/api/reports/expenses" && method === "GET") return expenseReport(env, url);
   if ((url.pathname === "/api/reports/expenses.xlsx" || url.pathname === "/api/reports/expenses.xls") && method === "GET") return expenseReportXlsx(env, url);
+  if (url.pathname === "/api/reports/collections" && method === "GET") return collectionReport(env, url);
+  if (url.pathname === "/api/reports/collections.xlsx" && method === "GET") return collectionReportXlsx(env, url);
   if (url.pathname === "/api/reports/responsible-monthly" && method === "GET") return responsibleMonthlyReport(env);
   if (url.pathname === "/api/transfers" && method === "GET") return listTransfers(env);
   if (url.pathname === "/api/transfers" && method === "POST") return createTransfer(request, env, user);
@@ -654,6 +656,62 @@ function reportDates(url) {
   };
 }
 
+async function collectionReportData(env, url) {
+  const { dateFrom, dateTo } = reportDates(url);
+  const customerId = Number(url.searchParams.get("customer_id") || 0) || null;
+  const responsible = String(url.searchParams.get("responsible") || "").trim();
+  const collectionType = String(url.searchParams.get("collection_type") || "").trim();
+  const filters = ["COALESCE(entry_date, '') >= ?", "COALESCE(entry_date, '') <= ?"];
+  const binds = [dateFrom, dateTo];
+  if (customerId) {
+    filters.push("customer_id = ?");
+    binds.push(customerId);
+  }
+  if (responsible) {
+    filters.push("responsible = ?");
+    binds.push(responsible);
+  }
+  if (collectionType) {
+    filters.push("collection_type = ?");
+    binds.push(collectionType);
+  }
+  const whereSql = filters.join(" AND ");
+  const items = await env.DB.prepare(
+    `SELECT id, entry_date, month, responsible, customer_id, client_name, collection_type, amount, payment_method, note
+     FROM collections
+     WHERE ${whereSql}
+     ORDER BY entry_date, id`
+  ).bind(...binds).all();
+  const totals = await env.DB.prepare(
+    `SELECT COALESCE(client_name, 'غير محدد') AS client_name,
+            COALESCE(collection_type, 'غير محدد') AS collection_type,
+            COALESCE(responsible, 'غير محدد') AS responsible,
+            SUM(amount) AS total,
+            COUNT(*) AS count
+     FROM collections
+     WHERE ${whereSql}
+     GROUP BY client_name, collection_type, responsible
+     ORDER BY total DESC, client_name, collection_type, responsible`
+  ).bind(...binds).all();
+  const totalAmount = items.results.reduce((sum, row) => sum + Number(row.amount || 0), 0);
+  return { date_from: dateFrom, date_to: dateTo, customer_id: customerId, responsible, collection_type: collectionType, total: totalAmount, items: items.results, totals: totals.results };
+}
+
+async function collectionReport(env, url) {
+  return json(await collectionReportData(env, url));
+}
+
+async function collectionReportXlsx(env, url) {
+  const data = await collectionReportData(env, url);
+  const file = collectionXlsx(data);
+  return new Response(file, {
+    headers: {
+      "content-type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      "content-disposition": `attachment; filename="collections-${data.date_from}-to-${data.date_to}.xlsx"`,
+    },
+  });
+}
+
 async function expenseReportData(env, url) {
   const { dateFrom, dateTo } = reportDates(url);
   const category = String(url.searchParams.get("expense_type") || "").trim();
@@ -721,17 +779,59 @@ async function responsibleMonthlyReport(env) {
 
 function expenseXlsx(data) {
   const { rows, merges } = expenseSheetRows(data);
+  return reportXlsx("تقرير المصروفات", rows, merges);
+}
+
+function collectionXlsx(data) {
+  const { rows, merges } = collectionSheetRows(data);
+  return reportXlsx("تقرير التحصيلات", rows, merges);
+}
+
+function reportXlsx(title, rows, merges) {
   const files = {
     "[Content_Types].xml": contentTypesXml(),
     "_rels/.rels": rootRelsXml(),
-    "docProps/core.xml": corePropsXml(),
+    "docProps/core.xml": corePropsXml(title),
     "docProps/app.xml": appPropsXml(),
-    "xl/workbook.xml": workbookXml(),
+    "xl/workbook.xml": workbookXml(title),
     "xl/_rels/workbook.xml.rels": workbookRelsXml(),
     "xl/styles.xml": workbookStylesXml(),
     "xl/worksheets/sheet1.xml": worksheetXml(rows, merges),
   };
   return zipStore(files);
+}
+
+function collectionSheetRows(data) {
+  const period = `${data.date_from === "0000-01-01" ? "البداية" : data.date_from} - ${data.date_to === "9999-12-31" ? "النهاية" : data.date_to}`;
+  const filters = [
+    data.responsible ? `المسؤول: ${data.responsible}` : "كل المسؤولين",
+    data.collection_type ? `نوع التحصيل: ${data.collection_type}` : "كل الأنواع",
+  ].join(" / ");
+  const rows = [];
+  const merges = [];
+  const addRow = (values, style = "normal", mergeAcross = 0) => {
+    const rowNumber = rows.length + 1;
+    rows.push({ values, style });
+    if (mergeAcross > 1) merges.push(`A${rowNumber}:${columnName(mergeAcross)}${rowNumber}`);
+  };
+
+  addRow(["تقرير التحصيلات"], "title", 5);
+  addRow(["الفترة", period, "الفلاتر", filters, "الإجمالي", data.total], "meta");
+  addRow(["", "", "", "", ""], "normal");
+  addRow(["العميل", "نوع التحصيل", "المسؤول", "عدد التحصيلات", "الإجمالي"], "header");
+  data.totals.forEach((item) => {
+    addRow([
+      item.client_name || "",
+      item.collection_type || "",
+      item.responsible || "",
+      item.count || 0,
+      item.total || 0,
+    ], "normal");
+  });
+  if (!data.totals.length) {
+    addRow(["لا توجد تحصيلات مطابقة للفلاتر"], "normal", 5);
+  }
+  return { rows, merges };
 }
 
 function expenseSheetRows(data) {
@@ -785,7 +885,7 @@ function worksheetXml(rows, merges) {
   return `<?xml version="1.0" encoding="UTF-8"?>
 <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
   <sheetViews><sheetView rightToLeft="1" workbookViewId="0"/></sheetViews>
-  <cols><col min="1" max="1" width="16" customWidth="1"/><col min="2" max="2" width="42" customWidth="1"/><col min="3" max="3" width="16" customWidth="1"/><col min="4" max="4" width="18" customWidth="1"/></cols>
+  <cols><col min="1" max="1" width="22" customWidth="1"/><col min="2" max="2" width="34" customWidth="1"/><col min="3" max="3" width="20" customWidth="1"/><col min="4" max="4" width="18" customWidth="1"/><col min="5" max="5" width="18" customWidth="1"/><col min="6" max="6" width="18" customWidth="1"/></cols>
   <sheetData>
 ${rows.map((row, index) => xlsxRow(row, index + 1, styleIds[row.style] ?? 0)).join("\n")}
   </sheetData>
@@ -838,11 +938,11 @@ function rootRelsXml() {
 </Relationships>`;
 }
 
-function workbookXml() {
+function workbookXml(sheetName = "تقرير") {
   return `<?xml version="1.0" encoding="UTF-8"?>
 <workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
   <workbookViews><workbookView xWindow="0" yWindow="0" windowWidth="16384" windowHeight="8192"/></workbookViews>
-  <sheets><sheet name="تقرير المصروفات" sheetId="1" r:id="rId1"/></sheets>
+  <sheets><sheet name="${xmlEscape(sheetName)}" sheetId="1" r:id="rId1"/></sheets>
 </workbook>`;
 }
 
@@ -873,10 +973,10 @@ function workbookStylesXml() {
 </styleSheet>`;
 }
 
-function corePropsXml() {
+function corePropsXml(title = "تقرير") {
   return `<?xml version="1.0" encoding="UTF-8"?>
 <cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
-  <dc:title>تقرير المصروفات</dc:title>
+  <dc:title>${xmlEscape(title)}</dc:title>
   <dc:creator>تحصيلات</dc:creator>
   <cp:lastModifiedBy>تحصيلات</cp:lastModifiedBy>
   <dcterms:created xsi:type="dcterms:W3CDTF">${xmlEscape(nowIso())}</dcterms:created>

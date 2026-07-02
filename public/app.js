@@ -12,6 +12,7 @@ const state = {
   audit: [],
   users: [],
   expenseReport: null,
+  collectionReport: null,
   responsibleMonthly: [],
   user: null,
 };
@@ -99,7 +100,7 @@ function fillCustomerSelect(select, current = "") {
   select.innerHTML = "";
   const placeholder = document.createElement("option");
   placeholder.value = "";
-  placeholder.textContent = "اختر العميل";
+  placeholder.textContent = select.id === "collectionReportCustomer" ? "كل العملاء" : "اختر العميل";
   select.appendChild(placeholder);
   state.customers.forEach((customer) => {
     const option = document.createElement("option");
@@ -320,12 +321,13 @@ function renderExpenses() {
       <td data-label="المبلغ">${money(item.amount)}</td>
       <td data-label="الطريقة">${item.payment_method}</td>
       <td data-label="الخزينة">${item.deducted_from_treasury ? "نعم" : "لا"}</td>
+      <td data-label="ملاحظة">${item.note || "-"}</td>
       <td class="actions">
         <button type="button" data-edit-expense="${item.id}" title="تعديل">✎</button>
         <button class="danger" type="button" data-delete-expense="${item.id}" title="حذف">×</button>
       </td>
     </tr>
-  `).join("") || `<tr><td colspan="8" class="muted">لا توجد مصروفات مطابقة</td></tr>`;
+  `).join("") || `<tr><td colspan="9" class="muted">لا توجد مصروفات مطابقة</td></tr>`;
 }
 
 function renderAudit() {
@@ -387,6 +389,21 @@ function renderExpenseReport() {
   `).join("") || `<tr><td colspan="5" class="muted">لا توجد مصروفات في هذه الفترة</td></tr>`;
 }
 
+function renderCollectionReport() {
+  const body = qs("#collectionReportRows");
+  if (!body) return;
+  const rows = state.collectionReport?.totals || [];
+  body.innerHTML = rows.map((item) => `
+    <tr>
+      <td data-label="العميل">${item.client_name || "-"}</td>
+      <td data-label="نوع التحصيل">${item.collection_type || "-"}</td>
+      <td data-label="المسؤول">${item.responsible || "-"}</td>
+      <td data-label="الإجمالي">${money(item.total)}</td>
+      <td data-label="عدد التحصيلات">${money(item.count)}</td>
+    </tr>
+  `).join("") || `<tr><td colspan="5" class="muted">لا توجد تحصيلات في هذه الفترة</td></tr>`;
+}
+
 function renderResponsibleMonthly() {
   const body = qs("#responsibleMonthlyRows");
   if (!body) return;
@@ -438,7 +455,12 @@ async function loadBootstrap() {
   state.user = data.user;
   qsa('select[name="responsible"]').forEach((select) => fillSelect(select, state.responsibles));
   qsa('select[name="customer_id"]').forEach((select) => fillCustomerSelect(select, select.value));
+  fillCustomerSelect(qs("#collectionReportCustomer"), qs("#collectionReportCustomer")?.value);
   qsa('select[name="collection_type"]').forEach((select) => fillSelect(select, state.collectionTypes, select.value));
+  fillSelect(qs("#collectionReportType"), ["", ...state.collectionTypes], qs("#collectionReportType")?.value);
+  qs("#collectionReportType").options[0].textContent = "كل الأنواع";
+  fillSelect(qs("#collectionReportResponsible"), ["", ...state.responsibles], qs("#collectionReportResponsible")?.value);
+  qs("#collectionReportResponsible").options[0].textContent = "كل المسؤولين";
   qsa('select[name="payment_method"]').forEach((select) => fillSelect(select, state.paymentMethods));
   qsa('select[name="expense_account_id"]').forEach((select) => fillExpenseAccountSelect(select, select.value));
   fillExpenseReportCodes();
@@ -508,6 +530,27 @@ async function loadExpenseReport() {
   renderExpenseReport();
 }
 
+async function loadCollectionReport() {
+  const params = collectionReportParams();
+  state.collectionReport = await api(`/api/reports/collections?${params.toString()}`);
+  renderCollectionReport();
+}
+
+function collectionReportParams() {
+  const params = new URLSearchParams();
+  const from = qs("#collectionReportFrom")?.value;
+  const to = qs("#collectionReportTo")?.value;
+  const customerId = qs("#collectionReportCustomer")?.value;
+  const responsible = qs("#collectionReportResponsible")?.value;
+  const type = qs("#collectionReportType")?.value;
+  if (from) params.set("date_from", from);
+  if (to) params.set("date_to", to);
+  if (customerId) params.set("customer_id", customerId);
+  if (responsible) params.set("responsible", responsible);
+  if (type) params.set("collection_type", type);
+  return params;
+}
+
 function expenseReportParams() {
   const params = new URLSearchParams();
   const from = qs("#expenseReportFrom")?.value;
@@ -529,7 +572,7 @@ async function loadResponsibleMonthly() {
 
 async function reloadAll() {
   await loadBootstrap();
-  await Promise.all([loadDashboard(), loadCollections(), loadCustomers(), loadExpenses(), loadTransfers(), loadUsers(), loadAudit(), loadExpenseReport(), loadResponsibleMonthly()]);
+  await Promise.all([loadDashboard(), loadCollections(), loadCustomers(), loadExpenses(), loadTransfers(), loadUsers(), loadAudit(), loadExpenseReport(), loadCollectionReport(), loadResponsibleMonthly()]);
 }
 
 function formData(form) {
@@ -766,6 +809,10 @@ function bindEvents() {
     loadExpenseReport().catch((error) => showToast(error.message, true));
   });
 
+  qs("#loadCollectionReportBtn").addEventListener("click", () => {
+    loadCollectionReport().catch((error) => showToast(error.message, true));
+  });
+
   qs("#expenseReportType").addEventListener("change", () => {
     fillExpenseReportCodes();
   });
@@ -773,6 +820,11 @@ function bindEvents() {
   qs("#exportExpenseReportBtn").addEventListener("click", () => {
     const params = expenseReportParams();
     window.location.href = `/api/reports/expenses.xlsx?${params.toString()}`;
+  });
+
+  qs("#exportCollectionReportBtn").addEventListener("click", () => {
+    const params = collectionReportParams();
+    window.location.href = `/api/reports/collections.xlsx?${params.toString()}`;
   });
 
   qs("#logoutBtn").addEventListener("click", async () => {
