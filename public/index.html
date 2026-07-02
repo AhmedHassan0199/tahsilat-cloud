@@ -70,19 +70,12 @@
       </nav>
 
       <section id="dashboard" class="tab-panel active">
-        <div class="grid two">
+        <div class="dashboard-grid">
           <div class="panel">
             <div class="panel-head">
-              <h2>مقارنة الشهور</h2>
+              <h2>الأداء الشهري</h2>
             </div>
-            <div class="table-wrap">
-              <table>
-                <thead>
-                  <tr><th>الشهر</th><th>التحصيل</th><th>المصروفات</th><th>الصافي</th></tr>
-                </thead>
-                <tbody id="monthRows"></tbody>
-              </table>
-            </div>
+            <div id="monthlyTrendChart" class="chart chart-large"></div>
           </div>
           <div class="panel">
             <div class="panel-head">
@@ -95,30 +88,23 @@
               <div><dt>أكبر عميل</dt><dd id="largestClient">-</dd></div>
             </dl>
           </div>
-        </div>
-
-        <div class="grid two">
           <div class="panel">
             <div class="panel-head">
-              <h2>المسؤولون</h2>
+              <h2>توزيع التحصيل حسب المسؤول</h2>
             </div>
-            <div class="table-wrap">
-              <table>
-                <thead><tr><th>المسؤول</th><th>الإجمالي</th><th>عدد التحصيلات</th></tr></thead>
-                <tbody id="responsibleRows"></tbody>
-              </table>
-            </div>
+            <div id="responsibleDonutChart" class="chart"></div>
           </div>
           <div class="panel">
             <div class="panel-head">
               <h2>أكبر العملاء</h2>
             </div>
-            <div class="table-wrap">
-              <table>
-                <thead><tr><th>العميل</th><th>الإجمالي</th><th>عدد العمليات</th></tr></thead>
-                <tbody id="clientRows"></tbody>
-              </table>
+            <div id="topClientsChart" class="chart"></div>
+          </div>
+          <div class="panel dashboard-wide">
+            <div class="panel-head">
+              <h2>أرصدة طرق الدفع</h2>
             </div>
+            <div id="treasuryBalanceChart" class="chart"></div>
           </div>
         </div>
       </section>

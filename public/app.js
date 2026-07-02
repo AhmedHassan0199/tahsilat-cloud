@@ -222,23 +222,6 @@ function renderDashboard() {
   qs("#treasuryBalance").textContent = money(data.totals.treasury);
   qs("#operationCount").textContent = money(data.totals.collection_count + data.totals.expense_count);
 
-  qs("#monthRows").innerHTML = data.by_month.map((row) => `
-    <tr>
-      <td data-label="الشهر">${monthName(row.month)}</td>
-      <td data-label="التحصيل">${money(row.collections)}</td>
-      <td data-label="المصروفات">${money(row.expenses)}</td>
-      <td data-label="الصافي" class="${Number(row.net) < 0 ? "negative" : "positive"}">${money(row.net)}</td>
-    </tr>
-  `).join("");
-
-  qs("#responsibleRows").innerHTML = data.by_responsible.map((row) => `
-    <tr><td data-label="المسؤول">${row.responsible}</td><td data-label="الإجمالي">${money(row.total)}</td><td data-label="عدد التحصيلات">${money(row.count)}</td></tr>
-  `).join("") || `<tr><td colspan="3" class="muted">لا توجد بيانات</td></tr>`;
-
-  qs("#clientRows").innerHTML = data.top_clients.map((row) => `
-    <tr><td data-label="العميل">${row.client_name}</td><td data-label="الإجمالي">${money(row.total)}</td><td data-label="عدد العمليات">${money(row.count)}</td></tr>
-  `).join("") || `<tr><td colspan="3" class="muted">لا توجد بيانات</td></tr>`;
-
   const bestMonth = data.insights.best_month;
   const bestDay = data.insights.best_day;
   const bestResponsible = data.insights.best_responsible;
@@ -247,6 +230,11 @@ function renderDashboard() {
   qs("#bestDay").textContent = bestDay ? `${bestDay.entry_date} - ${money(bestDay.total)}` : "-";
   qs("#bestResponsible").textContent = bestResponsible ? `${bestResponsible.responsible} - ${money(bestResponsible.total)}` : "-";
   qs("#largestClient").textContent = largestClient ? `${largestClient.client_name} - ${money(largestClient.total)}` : "-";
+
+  qs("#monthlyTrendChart").innerHTML = monthlyTrendChart(data.by_month);
+  qs("#responsibleDonutChart").innerHTML = donutChart(data.by_responsible, "responsible", "total");
+  qs("#topClientsChart").innerHTML = barChart(data.top_clients, "client_name", "total", { limit: 8 });
+  qs("#treasuryBalanceChart").innerHTML = barChart(data.treasury_by_method, "payment_method", "balance", { limit: 8, signed: true });
 
   qs("#treasuryRows").innerHTML = data.treasury_by_method.map((row) => `
     <tr>
@@ -258,6 +246,104 @@ function renderDashboard() {
       <td data-label="الرصيد" class="${Number(row.balance) < 0 ? "negative" : "positive"}">${money(row.balance)}</td>
     </tr>
   `).join("");
+}
+
+function monthlyTrendChart(rows) {
+  const data = rows || [];
+  const width = 760;
+  const height = 300;
+  const pad = { top: 18, right: 22, bottom: 42, left: 58 };
+  const innerW = width - pad.left - pad.right;
+  const innerH = height - pad.top - pad.bottom;
+  const series = [
+    { key: "collections", label: "التحصيل", color: "#2f9b34" },
+    { key: "expenses", label: "المصروفات", color: "#111111" },
+    { key: "net", label: "الصافي", color: "#6aa84f" },
+  ];
+  const values = data.flatMap((row) => series.map((item) => Number(row[item.key] || 0)));
+  const maxValue = Math.max(1, ...values);
+  const minValue = Math.min(0, ...values);
+  const range = Math.max(1, maxValue - minValue);
+  const stepX = data.length > 1 ? innerW / (data.length - 1) : innerW;
+  const y = (value) => pad.top + innerH - ((Number(value || 0) - minValue) / range) * innerH;
+  const x = (index) => pad.left + index * stepX;
+  const lines = series.map((item) => {
+    const points = data.map((row, index) => `${x(index)},${y(row[item.key])}`).join(" ");
+    return `<polyline class="chart-line" points="${points}" stroke="${item.color}"/>`;
+  }).join("");
+  const labels = data.map((row, index) => `<text class="chart-axis" x="${x(index)}" y="${height - 14}" text-anchor="middle">${monthName(row.month).replace("شهر ", "")}</text>`).join("");
+  const legend = series.map((item, index) => `
+    <span class="chart-legend-item"><i style="background:${item.color}"></i>${item.label}</span>
+  `).join("");
+  return `
+    <svg viewBox="0 0 ${width} ${height}" role="img" aria-label="الأداء الشهري">
+      <line class="chart-grid" x1="${pad.left}" y1="${pad.top}" x2="${pad.left}" y2="${height - pad.bottom}"/>
+      <line class="chart-grid" x1="${pad.left}" y1="${height - pad.bottom}" x2="${width - pad.right}" y2="${height - pad.bottom}"/>
+      ${[0, 0.25, 0.5, 0.75, 1].map((tick) => {
+        const value = minValue + range * tick;
+        const ty = y(value);
+        return `<line class="chart-grid ${Math.abs(value) < 0.001 ? "" : "faint"}" x1="${pad.left}" y1="${ty}" x2="${width - pad.right}" y2="${ty}"/><text class="chart-axis" x="${pad.left - 8}" y="${ty + 4}" text-anchor="end">${money(value)}</text>`;
+      }).join("")}
+      ${lines}
+      ${labels}
+    </svg>
+    <div class="chart-legend">${legend}</div>
+  `;
+}
+
+function donutChart(rows, labelKey, valueKey) {
+  const data = (rows || []).filter((row) => Number(row[valueKey] || 0) > 0);
+  if (!data.length) return emptyChart();
+  const total = data.reduce((sum, row) => sum + Number(row[valueKey] || 0), 0);
+  const colors = ["#2f9b34", "#111111", "#6aa84f", "#7fbf7b", "#8c8c8c", "#c4d9bd"];
+  let offset = 25;
+  const radius = 42;
+  const circumference = 2 * Math.PI * radius;
+  const rings = data.map((row, index) => {
+    const value = Number(row[valueKey] || 0);
+    const dash = (value / total) * circumference;
+    const stroke = colors[index % colors.length];
+    const circle = `<circle class="donut-segment" r="${radius}" cx="60" cy="60" stroke="${stroke}" stroke-dasharray="${dash} ${circumference - dash}" stroke-dashoffset="-${offset}"/>`;
+    offset += dash;
+    return circle;
+  }).join("");
+  const legend = data.map((row, index) => `
+    <div class="rank-row"><span><i style="background:${colors[index % colors.length]}"></i>${escapeHtml(row[labelKey] || "غير محدد")}</span><strong>${money(row[valueKey])}</strong></div>
+  `).join("");
+  return `
+    <div class="donut-layout">
+      <svg viewBox="0 0 120 120" role="img" aria-label="توزيع التحصيل">
+        <circle class="donut-bg" r="${radius}" cx="60" cy="60"/>
+        ${rings}
+        <text class="donut-total" x="60" y="57" text-anchor="middle">${money(total)}</text>
+        <text class="donut-caption" x="60" y="74" text-anchor="middle">إجمالي</text>
+      </svg>
+      <div class="rank-list">${legend}</div>
+    </div>
+  `;
+}
+
+function barChart(rows, labelKey, valueKey, options = {}) {
+  const data = (rows || [])
+    .filter((row) => Number(row[valueKey] || 0) !== 0)
+    .slice(0, options.limit || 8);
+  if (!data.length) return emptyChart();
+  const maxValue = Math.max(1, ...data.map((row) => Math.abs(Number(row[valueKey] || 0))));
+  return `<div class="bar-list">${data.map((row) => {
+    const value = Number(row[valueKey] || 0);
+    const pct = Math.max(4, (Math.abs(value) / maxValue) * 100);
+    const negative = value < 0;
+    return `
+      <div class="bar-row">
+        <div class="bar-meta"><span>${escapeHtml(row[labelKey] || "غير محدد")}</span><strong class="${negative ? "negative" : "positive"}">${money(value)}</strong></div>
+        <div class="bar-track"><div class="bar-fill ${negative ? "negative-fill" : ""}" style="width:${pct}%"></div></div>
+      </div>
+    `;
+  }).join("")}</div>`;
+}
+
+function emptyChart() {
+  return `<div class="empty-chart">لا توجد بيانات كافية</div>`;
 }
 
 function collectionQuery() {
