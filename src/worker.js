@@ -4,6 +4,13 @@ const PASSWORD_ITERATIONS = 20000;
 const JSON_HEADERS = { "content-type": "application/json; charset=utf-8" };
 
 const RESPONSIBLES = ["نورا", "محمد حسن", "المصريه"];
+const CRC32_TABLE = Array.from({ length: 256 }, (_, index) => {
+  let value = index;
+  for (let bit = 0; bit < 8; bit += 1) {
+    value = value & 1 ? 0xedb88320 ^ (value >>> 1) : value >>> 1;
+  }
+  return value >>> 0;
+});
 
 export default {
   async fetch(request, env) {
@@ -49,7 +56,7 @@ async function handleApi(request, env, url) {
   if (url.pathname === "/api/payment-methods" && method === "POST") return createPaymentMethod(request, env, user);
   if (url.pathname === "/api/expense-accounts" && method === "GET") return expenseAccounts(env);
   if (url.pathname === "/api/reports/expenses" && method === "GET") return expenseReport(env, url);
-  if (url.pathname === "/api/reports/expenses.xls" && method === "GET") return expenseReportExcel(env, url);
+  if ((url.pathname === "/api/reports/expenses.xlsx" || url.pathname === "/api/reports/expenses.xls") && method === "GET") return expenseReportXlsx(env, url);
   if (url.pathname === "/api/reports/responsible-monthly" && method === "GET") return responsibleMonthlyReport(env);
   if (url.pathname === "/api/transfers" && method === "GET") return listTransfers(env);
   if (url.pathname === "/api/transfers" && method === "POST") return createTransfer(request, env, user);
@@ -561,13 +568,13 @@ async function expenseReport(env, url) {
   return json(await expenseReportData(env, url));
 }
 
-async function expenseReportExcel(env, url) {
+async function expenseReportXlsx(env, url) {
   const data = await expenseReportData(env, url);
-  const xml = expenseExcelXml(data);
-  return new Response(xml, {
+  const file = expenseXlsx(data);
+  return new Response(file, {
     headers: {
-      "content-type": "application/vnd.ms-excel; charset=utf-8",
-      "content-disposition": `attachment; filename="expenses-${data.date_from}-to-${data.date_to}.xls"`,
+      "content-type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      "content-disposition": `attachment; filename="expenses-${data.date_from}-to-${data.date_to}.xlsx"`,
     },
   });
 }
@@ -586,7 +593,22 @@ async function responsibleMonthlyReport(env) {
   return json({ items: result.results });
 }
 
-function expenseExcelXml(data) {
+function expenseXlsx(data) {
+  const { rows, merges } = expenseSheetRows(data);
+  const files = {
+    "[Content_Types].xml": contentTypesXml(),
+    "_rels/.rels": rootRelsXml(),
+    "docProps/core.xml": corePropsXml(),
+    "docProps/app.xml": appPropsXml(),
+    "xl/workbook.xml": workbookXml(),
+    "xl/_rels/workbook.xml.rels": workbookRelsXml(),
+    "xl/styles.xml": workbookStylesXml(),
+    "xl/worksheets/sheet1.xml": worksheetXml(rows, merges),
+  };
+  return zipStore(files);
+}
+
+function expenseSheetRows(data) {
   const groups = new Map();
   data.totals.forEach((item) => {
     const category = item.expense_category || "غير محدد";
@@ -596,108 +618,249 @@ function expenseExcelXml(data) {
   const period = `${data.date_from === "0000-01-01" ? "البداية" : data.date_from} - ${data.date_to === "9999-12-31" ? "النهاية" : data.date_to}`;
   const typeLabel = data.expense_type || "كل الأنواع";
   const selectedCodes = data.codes.length ? data.codes.join("، ") : "كل الأكواد";
-  const rows = [
-    excelRow(["تقرير المصروفات", "", "", ""], "Title", 4),
-    excelRow(["الفترة", period, "النوع", typeLabel], "Meta"),
-    excelRow(["الأكواد", selectedCodes, "الإجمالي", data.total], "Meta"),
-    excelRow(["", "", "", ""], "Normal"),
-  ];
+  const rows = [];
+  const merges = [];
+  const addRow = (values, style = "normal", mergeAcross = 0) => {
+    const rowNumber = rows.length + 1;
+    rows.push({ values, style });
+    if (mergeAcross > 1) merges.push(`A${rowNumber}:${columnName(mergeAcross)}${rowNumber}`);
+  };
+
+  addRow(["تقرير المصروفات"], "title", 4);
+  addRow(["الفترة", period, "النوع", typeLabel], "meta");
+  addRow(["الأكواد", selectedCodes, "الإجمالي", data.total], "meta");
+  addRow(["", "", "", ""], "normal");
 
   groups.forEach((items, category) => {
     const categoryTotal = items.reduce((sum, item) => sum + Number(item.total || 0), 0);
-    rows.push(excelRow([category, "", "", ""], "Section", 4));
-    rows.push(excelRow(["رقم المصروف", "اسم المصروف", "عدد العمليات", "القيمة"], "Header"));
+    addRow([category], "section", 4);
+    addRow(["رقم المصروف", "اسم المصروف", "عدد العمليات", "القيمة"], "header");
     items.forEach((item) => {
-      rows.push(excelRow([
+      addRow([
         item.expense_code || "",
         item.expense_name || "",
         item.count || 0,
         item.total || 0,
-      ], "Normal"));
+      ], "normal");
     });
-    rows.push(excelRow(["", "إجمالي", "", categoryTotal], "Total"));
-    rows.push(excelRow(["", "", "", ""], "Normal"));
+    addRow(["", "إجمالي", "", categoryTotal], "total");
+    addRow(["", "", "", ""], "normal");
   });
 
   if (!groups.size) {
-    rows.push(excelRow(["لا توجد مصروفات مطابقة للفلاتر", "", "", ""], "Normal", 4));
+    addRow(["لا توجد مصروفات مطابقة للفلاتر"], "normal", 4);
   }
 
-  return `<?xml version="1.0" encoding="UTF-8"?>
-<?mso-application progid="Excel.Sheet"?>
-<Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet"
- xmlns:o="urn:schemas-microsoft-com:office:office"
- xmlns:x="urn:schemas-microsoft-com:office:excel"
- xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet">
- <DocumentProperties xmlns="urn:schemas-microsoft-com:office:office">
-  <Title>تقرير المصروفات</Title>
-  <Author>تحصيلات</Author>
-  <Created>${xmlEscape(nowIso())}</Created>
- </DocumentProperties>
- <ExcelWorkbook xmlns="urn:schemas-microsoft-com:office:excel">
-  <ProtectStructure>False</ProtectStructure>
-  <ProtectWindows>False</ProtectWindows>
- </ExcelWorkbook>
- <Styles>
-  <Style ss:ID="Title"><Alignment ss:Horizontal="Center"/><Font ss:Bold="1" ss:Size="16"/><Interior ss:Color="#D9EAF7" ss:Pattern="Solid"/><Borders>${excelBorders()}</Borders></Style>
-  <Style ss:ID="Section"><Alignment ss:Horizontal="Center"/><Font ss:Bold="1" ss:Size="13"/><Interior ss:Color="#E2F0D9" ss:Pattern="Solid"/><Borders>${excelBorders()}</Borders></Style>
-  <Style ss:ID="Header"><Alignment ss:Horizontal="Center"/><Font ss:Bold="1"/><Interior ss:Color="#F2F2F2" ss:Pattern="Solid"/><Borders>${excelBorders()}</Borders></Style>
-  <Style ss:ID="Meta"><Alignment ss:Horizontal="Center"/><Font ss:Bold="1"/><Borders>${excelBorders()}</Borders></Style>
-  <Style ss:ID="Total"><Alignment ss:Horizontal="Center"/><Font ss:Bold="1"/><Interior ss:Color="#FFF2CC" ss:Pattern="Solid"/><Borders>${excelBorders()}</Borders></Style>
-  <Style ss:ID="Normal"><Alignment ss:Horizontal="Center"/><Borders>${excelBorders()}</Borders></Style>
- </Styles>
- <Worksheet ss:Name="تقرير المصروفات">
-  <Table>
-   <Column ss:Width="95"/>
-   <Column ss:Width="260"/>
-   <Column ss:Width="95"/>
-   <Column ss:Width="110"/>
-${rows.join("\n")}
-  </Table>
-  <WorksheetOptions xmlns="urn:schemas-microsoft-com:office:excel">
-   <DisplayRightToLeft/>
-   <Print>
-    <ValidPrinterInfo/>
-    <HorizontalResolution>600</HorizontalResolution>
-    <VerticalResolution>600</VerticalResolution>
-   </Print>
-   <Selected/>
-   <ProtectObjects>False</ProtectObjects>
-   <ProtectScenarios>False</ProtectScenarios>
-  </WorksheetOptions>
- </Worksheet>
-</Workbook>`;
+  return { rows, merges };
 }
 
-function excelRow(cells, style = "Normal", mergeAcross = 0) {
-  if (mergeAcross > 1) {
-    return `   <Row><Cell ss:StyleID="${style}" ss:MergeAcross="${mergeAcross - 1}"><Data ss:Type="${typeof cells[0] === "number" ? "Number" : "String"}">${xmlEscape(cells[0])}</Data></Cell></Row>`;
+function worksheetXml(rows, merges) {
+  const styleIds = { normal: 0, title: 1, section: 2, header: 3, meta: 4, total: 5 };
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <sheetViews><sheetView rightToLeft="1" workbookViewId="0"/></sheetViews>
+  <cols><col min="1" max="1" width="16" customWidth="1"/><col min="2" max="2" width="42" customWidth="1"/><col min="3" max="3" width="16" customWidth="1"/><col min="4" max="4" width="18" customWidth="1"/></cols>
+  <sheetData>
+${rows.map((row, index) => xlsxRow(row, index + 1, styleIds[row.style] ?? 0)).join("\n")}
+  </sheetData>
+  ${merges.length ? `<mergeCells count="${merges.length}">${merges.map((ref) => `<mergeCell ref="${ref}"/>`).join("")}</mergeCells>` : ""}
+  <pageMargins left="0.7" right="0.7" top="0.75" bottom="0.75" header="0.3" footer="0.3"/>
+</worksheet>`;
+}
+
+function xlsxRow(row, rowNumber, styleId) {
+  return `    <row r="${rowNumber}">${row.values.map((value, index) => xlsxCell(value, `${columnName(index + 1)}${rowNumber}`, styleId)).join("")}</row>`;
+}
+
+function xlsxCell(value, ref, styleId) {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return `<c r="${ref}" s="${styleId}"><v>${value}</v></c>`;
   }
-  return `   <Row>${cells.map((cell, index) => {
-    return `<Cell ss:StyleID="${style}"><Data ss:Type="${typeof cell === "number" ? "Number" : "String"}">${xmlEscape(cell)}</Data></Cell>`;
-  }).join("")}</Row>`;
+  return `<c r="${ref}" s="${styleId}" t="inlineStr"><is><t>${xmlEscape(value)}</t></is></c>`;
 }
 
-function excelBorders() {
-  return `<Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#A6A6A6"/><Border ss:Position="Left" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#A6A6A6"/><Border ss:Position="Right" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#A6A6A6"/><Border ss:Position="Top" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#A6A6A6"/>`;
+function columnName(index) {
+  let name = "";
+  let n = index;
+  while (n > 0) {
+    const remainder = (n - 1) % 26;
+    name = String.fromCharCode(65 + remainder) + name;
+    n = Math.floor((n - 1) / 26);
+  }
+  return name;
 }
 
-function excelXml(rows) {
+function contentTypesXml() {
   return `<?xml version="1.0" encoding="UTF-8"?>
-<?mso-application progid="Excel.Sheet"?>
-<Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet"
- xmlns:o="urn:schemas-microsoft-com:office:office"
- xmlns:x="urn:schemas-microsoft-com:office:excel"
- xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet">
- <Worksheet ss:Name="Report">
-  <Table>
-${rows.map((row) => `   <Row>${row.map((cell) => `<Cell><Data ss:Type="${typeof cell === "number" ? "Number" : "String"}">${xmlEscape(cell)}</Data></Cell>`).join("")}</Row>`).join("\n")}
-  </Table>
-  <WorksheetOptions xmlns="urn:schemas-microsoft-com:office:excel">
-   <DisplayRightToLeft/>
-  </WorksheetOptions>
- </Worksheet>
-</Workbook>`;
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
+  <Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
+  <Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>
+  <Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/>
+  <Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/>
+</Types>`;
+}
+
+function rootRelsXml() {
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>
+  <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="docProps/core.xml"/>
+  <Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/extended-properties" Target="docProps/app.xml"/>
+</Relationships>`;
+}
+
+function workbookXml() {
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <workbookViews><workbookView xWindow="0" yWindow="0" windowWidth="16384" windowHeight="8192"/></workbookViews>
+  <sheets><sheet name="تقرير المصروفات" sheetId="1" r:id="rId1"/></sheets>
+</workbook>`;
+}
+
+function workbookRelsXml() {
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
+  <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>
+</Relationships>`;
+}
+
+function workbookStylesXml() {
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <fonts count="3"><font><sz val="11"/><name val="Arial"/></font><font><b/><sz val="16"/><name val="Arial"/></font><font><b/><sz val="12"/><name val="Arial"/></font></fonts>
+  <fills count="5"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FFD9EAF7"/><bgColor indexed="64"/></patternFill></fill><fill><patternFill patternType="solid"><fgColor rgb="FFE2F0D9"/><bgColor indexed="64"/></patternFill></fill><fill><patternFill patternType="solid"><fgColor rgb="FFFFF2CC"/><bgColor indexed="64"/></patternFill></fill></fills>
+  <borders count="2"><border><left/><right/><top/><bottom/><diagonal/></border><border><left style="thin"><color rgb="FFA6A6A6"/></left><right style="thin"><color rgb="FFA6A6A6"/></right><top style="thin"><color rgb="FFA6A6A6"/></top><bottom style="thin"><color rgb="FFA6A6A6"/></bottom><diagonal/></border></borders>
+  <cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>
+  <cellXfs count="6">
+    <xf numFmtId="0" fontId="0" fillId="0" borderId="1" xfId="0" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>
+    <xf numFmtId="0" fontId="1" fillId="2" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>
+    <xf numFmtId="0" fontId="2" fillId="3" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>
+    <xf numFmtId="0" fontId="2" fillId="0" borderId="1" xfId="0" applyFont="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>
+    <xf numFmtId="0" fontId="2" fillId="0" borderId="1" xfId="0" applyFont="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>
+    <xf numFmtId="0" fontId="2" fillId="4" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>
+  </cellXfs>
+  <cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>
+</styleSheet>`;
+}
+
+function corePropsXml() {
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <dc:title>تقرير المصروفات</dc:title>
+  <dc:creator>تحصيلات</dc:creator>
+  <cp:lastModifiedBy>تحصيلات</cp:lastModifiedBy>
+  <dcterms:created xsi:type="dcterms:W3CDTF">${xmlEscape(nowIso())}</dcterms:created>
+  <dcterms:modified xsi:type="dcterms:W3CDTF">${xmlEscape(nowIso())}</dcterms:modified>
+</cp:coreProperties>`;
+}
+
+function appPropsXml() {
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties" xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes">
+  <Application>Microsoft Excel</Application>
+</Properties>`;
+}
+
+function zipStore(files) {
+  const encoder = new TextEncoder();
+  const entries = Object.entries(files).map(([name, content]) => {
+    const nameBytes = encoder.encode(name);
+    const data = typeof content === "string" ? encoder.encode(content) : content;
+    return { name, nameBytes, data, crc: crc32(data) };
+  });
+  const localParts = [];
+  const centralParts = [];
+  let offset = 0;
+  entries.forEach((entry) => {
+    const local = zipLocalHeader(entry);
+    localParts.push(local, entry.data);
+    centralParts.push(zipCentralHeader(entry, offset));
+    offset += local.length + entry.data.length;
+  });
+  const centralSize = centralParts.reduce((sum, part) => sum + part.length, 0);
+  const end = zipEndRecord(entries.length, centralSize, offset);
+  return concatBytes([...localParts, ...centralParts, end]);
+}
+
+function zipLocalHeader(entry) {
+  const header = new Uint8Array(30 + entry.nameBytes.length);
+  const view = new DataView(header.buffer);
+  const { time, date } = zipDosTimestamp();
+  view.setUint32(0, 0x04034b50, true);
+  view.setUint16(4, 20, true);
+  view.setUint16(6, 0x0800, true);
+  view.setUint16(8, 0, true);
+  view.setUint16(10, time, true);
+  view.setUint16(12, date, true);
+  view.setUint32(14, entry.crc, true);
+  view.setUint32(18, entry.data.length, true);
+  view.setUint32(22, entry.data.length, true);
+  view.setUint16(26, entry.nameBytes.length, true);
+  header.set(entry.nameBytes, 30);
+  return header;
+}
+
+function zipCentralHeader(entry, offset) {
+  const header = new Uint8Array(46 + entry.nameBytes.length);
+  const view = new DataView(header.buffer);
+  const { time, date } = zipDosTimestamp();
+  view.setUint32(0, 0x02014b50, true);
+  view.setUint16(4, 20, true);
+  view.setUint16(6, 20, true);
+  view.setUint16(8, 0x0800, true);
+  view.setUint16(10, 0, true);
+  view.setUint16(12, time, true);
+  view.setUint16(14, date, true);
+  view.setUint32(16, entry.crc, true);
+  view.setUint32(20, entry.data.length, true);
+  view.setUint32(24, entry.data.length, true);
+  view.setUint16(28, entry.nameBytes.length, true);
+  view.setUint32(42, offset, true);
+  header.set(entry.nameBytes, 46);
+  return header;
+}
+
+function zipEndRecord(count, centralSize, centralOffset) {
+  const end = new Uint8Array(22);
+  const view = new DataView(end.buffer);
+  view.setUint32(0, 0x06054b50, true);
+  view.setUint16(8, count, true);
+  view.setUint16(10, count, true);
+  view.setUint32(12, centralSize, true);
+  view.setUint32(16, centralOffset, true);
+  return end;
+}
+
+function zipDosTimestamp() {
+  const date = new Date();
+  const year = Math.max(date.getFullYear(), 1980);
+  return {
+    time: (date.getHours() << 11) | (date.getMinutes() << 5) | Math.floor(date.getSeconds() / 2),
+    date: ((year - 1980) << 9) | ((date.getMonth() + 1) << 5) | date.getDate(),
+  };
+}
+
+function concatBytes(parts) {
+  const total = parts.reduce((sum, part) => sum + part.length, 0);
+  const out = new Uint8Array(total);
+  let offset = 0;
+  parts.forEach((part) => {
+    out.set(part, offset);
+    offset += part.length;
+  });
+  return out;
+}
+
+function crc32(bytes) {
+  let crc = 0xffffffff;
+  for (const byte of bytes) {
+    crc = CRC32_TABLE[(crc ^ byte) & 0xff] ^ (crc >>> 8);
+  }
+  return (crc ^ 0xffffffff) >>> 0;
 }
 
 function xmlEscape(value) {

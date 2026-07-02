@@ -652,7 +652,7 @@ function bindEvents() {
 
   qs("#exportExpenseReportBtn").addEventListener("click", () => {
     const params = expenseReportParams();
-    window.location.href = `/api/reports/expenses.xls?${params.toString()}`;
+    window.location.href = `/api/reports/expenses.xlsx?${params.toString()}`;
   });
 
   qs("#logoutBtn").addEventListener("click", async () => {
