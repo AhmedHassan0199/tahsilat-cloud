@@ -1,5 +1,6 @@
 const state = {
   paymentMethods: [],
+  expenseAccounts: [],
   responsibles: [],
   dashboard: null,
   collections: [],
@@ -7,6 +8,8 @@ const state = {
   transfers: [],
   audit: [],
   users: [],
+  expenseReport: null,
+  responsibleMonthly: [],
   user: null,
 };
 
@@ -85,6 +88,32 @@ function fillSelect(select, values, current = "") {
     option.value = typeof value === "string" ? value : value.name;
     option.textContent = typeof value === "string" ? value : value.name;
     select.appendChild(option);
+  });
+  if (current) select.value = current;
+}
+
+function fillExpenseAccountSelect(select, current = "") {
+  select.innerHTML = "";
+  const placeholder = document.createElement("option");
+  placeholder.value = "";
+  placeholder.textContent = "اختر رقم واسم المصروف";
+  select.appendChild(placeholder);
+
+  const groups = new Map();
+  state.expenseAccounts.forEach((item) => {
+    if (!groups.has(item.category)) groups.set(item.category, []);
+    groups.get(item.category).push(item);
+  });
+  groups.forEach((items, category) => {
+    const group = document.createElement("optgroup");
+    group.label = category;
+    items.forEach((item) => {
+      const option = document.createElement("option");
+      option.value = item.id;
+      option.textContent = `${item.code} - ${item.name}`;
+      group.appendChild(option);
+    });
+    select.appendChild(group);
   });
   if (current) select.value = current;
 }
@@ -195,7 +224,7 @@ function renderExpenses() {
       <td data-label="التاريخ">${item.entry_date || "-"}</td>
       <td data-label="الشهر">${item.month || "-"}</td>
       <td data-label="النوع">${item.expense_type}</td>
-      <td data-label="وجه الصرف">${item.description}</td>
+      <td data-label="وجه الصرف">${item.expense_code ? `${item.expense_code} - ${item.expense_name}` : item.description}</td>
       <td data-label="المبلغ">${money(item.amount)}</td>
       <td data-label="الطريقة">${item.payment_method}</td>
       <td data-label="الخزينة">${item.deducted_from_treasury ? "نعم" : "لا"}</td>
@@ -247,6 +276,35 @@ function renderUsers() {
   `).join("") || `<tr><td colspan="5" class="muted">لا توجد بيانات مستخدمين</td></tr>`;
 }
 
+function renderExpenseReport() {
+  const body = qs("#expenseReportRows");
+  if (!body) return;
+  const rows = state.expenseReport?.totals || [];
+  body.innerHTML = rows.map((item) => `
+    <tr>
+      <td data-label="التصنيف">${item.expense_category || "-"}</td>
+      <td data-label="رقم المصروف">${item.expense_code || "-"}</td>
+      <td data-label="اسم المصروف">${item.expense_name || "-"}</td>
+      <td data-label="الإجمالي">${money(item.total)}</td>
+      <td data-label="عدد العمليات">${money(item.count)}</td>
+    </tr>
+  `).join("") || `<tr><td colspan="5" class="muted">لا توجد مصروفات في هذه الفترة</td></tr>`;
+}
+
+function renderResponsibleMonthly() {
+  const body = qs("#responsibleMonthlyRows");
+  if (!body) return;
+  body.innerHTML = state.responsibleMonthly.map((item) => `
+    <tr>
+      <td data-label="الشهر">${monthName(item.month)}</td>
+      <td data-label="نورا">${money(item.noura)}</td>
+      <td data-label="محمد حسن">${money(item.mohamed_hassan)}</td>
+      <td data-label="المصريه">${money(item.egyptian)}</td>
+      <td data-label="الإجمالي">${money(item.total)}</td>
+    </tr>
+  `).join("");
+}
+
 function auditDetails(item) {
   const before = safeJson(item.before_data);
   const after = safeJson(item.after_data);
@@ -276,10 +334,12 @@ function escapeHtml(value) {
 async function loadBootstrap() {
   const data = await api("/api/bootstrap");
   state.paymentMethods = data.payment_methods;
+  state.expenseAccounts = data.expense_accounts || [];
   state.responsibles = data.responsibles;
   state.user = data.user;
   qsa('select[name="responsible"]').forEach((select) => fillSelect(select, state.responsibles));
   qsa('select[name="payment_method"]').forEach((select) => fillSelect(select, state.paymentMethods));
+  qsa('select[name="expense_account_id"]').forEach((select) => fillExpenseAccountSelect(select, select.value));
   qsa('select[name="source_method"]').forEach((select) => fillSelect(select, state.paymentMethods));
   qsa('select[name="target_method"]').forEach((select) => fillSelect(select, state.paymentMethods));
   qsa(".admin-only").forEach((item) => item.classList.toggle("hidden", state.user?.role !== "admin"));
@@ -332,9 +392,25 @@ async function loadUsers() {
   renderUsers();
 }
 
+async function loadExpenseReport() {
+  const params = new URLSearchParams();
+  const from = qs("#expenseReportFrom")?.value;
+  const to = qs("#expenseReportTo")?.value;
+  if (from) params.set("date_from", from);
+  if (to) params.set("date_to", to);
+  state.expenseReport = await api(`/api/reports/expenses?${params.toString()}`);
+  renderExpenseReport();
+}
+
+async function loadResponsibleMonthly() {
+  const data = await api("/api/reports/responsible-monthly");
+  state.responsibleMonthly = data.items;
+  renderResponsibleMonthly();
+}
+
 async function reloadAll() {
   await loadBootstrap();
-  await Promise.all([loadDashboard(), loadCollections(), loadExpenses(), loadTransfers(), loadUsers(), loadAudit()]);
+  await Promise.all([loadDashboard(), loadCollections(), loadExpenses(), loadTransfers(), loadUsers(), loadAudit(), loadExpenseReport(), loadResponsibleMonthly()]);
 }
 
 function formData(form) {
@@ -361,6 +437,7 @@ function resetExpenseForm() {
   form.deducted_from_treasury.checked = true;
   qs("#expenseFormTitle").textContent = "إضافة مصروف";
   fillSelect(form.payment_method, state.paymentMethods);
+  fillExpenseAccountSelect(form.expense_account_id);
 }
 
 async function saveCollection(event) {
@@ -456,7 +533,7 @@ function editExpense(id) {
   form.entry_date.value = item.entry_date || "";
   form.month.value = item.month || "";
   form.expense_type.value = item.expense_type;
-  form.description.value = item.description;
+  fillExpenseAccountSelect(form.expense_account_id, item.expense_account_id || "");
   form.amount.value = item.amount;
   form.payment_method.value = item.payment_method;
   form.deducted_from_treasury.checked = Boolean(item.deducted_from_treasury);
@@ -494,6 +571,19 @@ function bindEvents() {
 
   qs("#backupBtn").addEventListener("click", () => {
     downloadBackup().catch((error) => showToast(error.message, true));
+  });
+
+  qs("#loadExpenseReportBtn").addEventListener("click", () => {
+    loadExpenseReport().catch((error) => showToast(error.message, true));
+  });
+
+  qs("#exportExpenseReportBtn").addEventListener("click", () => {
+    const params = new URLSearchParams();
+    const from = qs("#expenseReportFrom").value;
+    const to = qs("#expenseReportTo").value;
+    if (from) params.set("date_from", from);
+    if (to) params.set("date_to", to);
+    window.location.href = `/api/reports/expenses.xls?${params.toString()}`;
   });
 
   qs("#logoutBtn").addEventListener("click", async () => {

@@ -47,6 +47,10 @@ async function handleApi(request, env, url) {
   }
   if (url.pathname === "/api/payment-methods" && method === "GET") return paymentMethods(env);
   if (url.pathname === "/api/payment-methods" && method === "POST") return createPaymentMethod(request, env, user);
+  if (url.pathname === "/api/expense-accounts" && method === "GET") return expenseAccounts(env);
+  if (url.pathname === "/api/reports/expenses" && method === "GET") return expenseReport(env, url);
+  if (url.pathname === "/api/reports/expenses.xls" && method === "GET") return expenseReportExcel(env, url);
+  if (url.pathname === "/api/reports/responsible-monthly" && method === "GET") return responsibleMonthlyReport(env);
   if (url.pathname === "/api/transfers" && method === "GET") return listTransfers(env);
   if (url.pathname === "/api/transfers" && method === "POST") return createTransfer(request, env, user);
   if (url.pathname === "/api/backup" && method === "GET") return backup(env, user);
@@ -69,6 +73,7 @@ async function health(env) {
   checks.sessions = await env.DB.prepare("SELECT COUNT(*) AS count FROM sessions").first();
   checks.collections = await env.DB.prepare("SELECT COUNT(*) AS count FROM collections").first();
   checks.transfers = await env.DB.prepare("SELECT COUNT(*) AS count FROM transfers").first().catch(() => ({ count: "migration_needed" }));
+  checks.expense_accounts = await env.DB.prepare("SELECT COUNT(*) AS count FROM expense_accounts").first().catch(() => ({ count: "migration_needed" }));
   checks.payment_methods = await env.DB.prepare("SELECT COUNT(*) AS count FROM payment_methods").first();
   checks.admin = await env.DB.prepare("SELECT id, username, role, active FROM users WHERE username = 'admin'").first();
   return json({ ok: true, checks });
@@ -215,9 +220,11 @@ function publicUser(user) {
 
 async function bootstrap(env, user) {
   const paymentMethods = await env.DB.prepare("SELECT id, name, note FROM payment_methods WHERE active = 1 ORDER BY name").all();
+  const expenseAccounts = await env.DB.prepare("SELECT id, category, code, name FROM expense_accounts WHERE active = 1 ORDER BY category DESC, CAST(code AS INTEGER)").all().catch(() => ({ results: [] }));
   const users = await env.DB.prepare("SELECT id, username, display_name, role, active, created_at FROM users ORDER BY username").all();
   return json({
     payment_methods: paymentMethods.results,
+    expense_accounts: expenseAccounts.results,
     users: users.results,
     responsibles: RESPONSIBLES,
     user,
@@ -333,6 +340,10 @@ function expenseData(payload) {
     entry_date: entryDate,
     month,
     expense_type: String(payload.expense_type || "مصروف").trim(),
+    expense_account_id: Number(payload.expense_account_id || 0) || null,
+    expense_code: null,
+    expense_name: null,
+    expense_category: null,
     description: String(payload.description || "").trim(),
     amount: Number(payload.amount || 0),
     payment_method: String(payload.payment_method || "غير محدد").trim(),
@@ -348,8 +359,19 @@ function validateCollection(data) {
 }
 
 function validateExpense(data) {
-  if (!data.description) throw new HttpError("وجه الصرف مطلوب", 400);
+  if (!data.expense_account_id && !data.description) throw new HttpError("وجه الصرف مطلوب", 400);
   if (!Number.isFinite(data.amount) || data.amount <= 0) throw new HttpError("قيمة المصروف يجب أن تكون أكبر من صفر", 400);
+}
+
+async function applyExpenseAccount(env, data) {
+  if (!data.expense_account_id) return data;
+  const account = await env.DB.prepare("SELECT * FROM expense_accounts WHERE id = ? AND active = 1").bind(data.expense_account_id).first();
+  if (!account) throw new HttpError("كود وجه الصرف غير صحيح", 400);
+  data.expense_code = account.code;
+  data.expense_name = account.name;
+  data.expense_category = account.category;
+  data.description = `${account.code} - ${account.name}`;
+  return data;
 }
 
 function truthy(value) {
@@ -430,13 +452,13 @@ async function listExpenses(env, url) {
 
 async function createExpense(request, env, user) {
   assertCanWrite(user);
-  const data = expenseData(await readJson(request));
+  const data = await applyExpenseAccount(env, expenseData(await readJson(request)));
   validateExpense(data);
   const now = nowIso();
   const result = await env.DB.prepare(
-    `INSERT INTO expenses(entry_date, month, expense_type, description, amount, payment_method, deducted_from_treasury, note, created_at, updated_at)
-     VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-  ).bind(data.entry_date, data.month, data.expense_type, data.description, data.amount, data.payment_method, data.deducted_from_treasury, data.note, now, now).run();
+    `INSERT INTO expenses(entry_date, month, expense_type, expense_account_id, expense_code, expense_name, expense_category, description, amount, payment_method, deducted_from_treasury, note, created_at, updated_at)
+     VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).bind(data.entry_date, data.month, data.expense_type, data.expense_account_id, data.expense_code, data.expense_name, data.expense_category, data.description, data.amount, data.payment_method, data.deducted_from_treasury, data.note, now, now).run();
   await insertAudit(env, request, user, "INSERT", "expenses", result.meta.last_row_id, null, data);
   return json({ id: result.meta.last_row_id });
 }
@@ -445,13 +467,13 @@ async function updateExpense(request, env, user, id) {
   assertCanWrite(user);
   const before = await env.DB.prepare("SELECT * FROM expenses WHERE id = ?").bind(id).first();
   if (!before) throw new HttpError("Record not found", 404);
-  const data = expenseData(await readJson(request));
+  const data = await applyExpenseAccount(env, expenseData(await readJson(request)));
   validateExpense(data);
   await env.DB.prepare(
     `UPDATE expenses
-     SET entry_date=?, month=?, expense_type=?, description=?, amount=?, payment_method=?, deducted_from_treasury=?, note=?, updated_at=?
+     SET entry_date=?, month=?, expense_type=?, expense_account_id=?, expense_code=?, expense_name=?, expense_category=?, description=?, amount=?, payment_method=?, deducted_from_treasury=?, note=?, updated_at=?
      WHERE id=?`
-  ).bind(data.entry_date, data.month, data.expense_type, data.description, data.amount, data.payment_method, data.deducted_from_treasury, data.note, nowIso(), id).run();
+  ).bind(data.entry_date, data.month, data.expense_type, data.expense_account_id, data.expense_code, data.expense_name, data.expense_category, data.description, data.amount, data.payment_method, data.deducted_from_treasury, data.note, nowIso(), id).run();
   await insertAudit(env, request, user, "UPDATE", "expenses", id, before, data);
   return json({ ok: true });
 }
@@ -470,6 +492,11 @@ async function paymentMethods(env) {
   return json({ items: result.results });
 }
 
+async function expenseAccounts(env) {
+  const result = await env.DB.prepare("SELECT id, category, code, name FROM expense_accounts WHERE active = 1 ORDER BY category DESC, CAST(code AS INTEGER)").all();
+  return json({ items: result.results });
+}
+
 async function createPaymentMethod(request, env, user) {
   assertCanWrite(user);
   const payload = await readJson(request);
@@ -480,6 +507,117 @@ async function createPaymentMethod(request, env, user) {
     .run();
   await insertAudit(env, request, user, "INSERT", "payment_methods", result.meta.last_row_id || null, null, { name, note: payload.note || null });
   return json({ ok: true });
+}
+
+function reportDates(url) {
+  return {
+    dateFrom: parseDateValue(url.searchParams.get("date_from")) || "0000-01-01",
+    dateTo: parseDateValue(url.searchParams.get("date_to")) || "9999-12-31",
+  };
+}
+
+async function expenseReportData(env, url) {
+  const { dateFrom, dateTo } = reportDates(url);
+  const items = await env.DB.prepare(
+    `SELECT id, entry_date, month, expense_type, expense_category, expense_code, expense_name, description, amount, payment_method, deducted_from_treasury, note
+     FROM expenses
+     WHERE COALESCE(entry_date, '') >= ? AND COALESCE(entry_date, '') <= ?
+     ORDER BY entry_date, id`
+  ).bind(dateFrom, dateTo).all();
+  const totals = await env.DB.prepare(
+    `SELECT COALESCE(expense_category, 'غير محدد') AS expense_category,
+            COALESCE(expense_code, '') AS expense_code,
+            COALESCE(expense_name, description, 'غير محدد') AS expense_name,
+            SUM(amount) AS total,
+            COUNT(*) AS count
+     FROM expenses
+     WHERE COALESCE(entry_date, '') >= ? AND COALESCE(entry_date, '') <= ?
+     GROUP BY expense_category, expense_code, expense_name
+     ORDER BY expense_category, CAST(expense_code AS INTEGER), expense_name`
+  ).bind(dateFrom, dateTo).all();
+  const totalAmount = items.results.reduce((sum, row) => sum + Number(row.amount || 0), 0);
+  return { date_from: dateFrom, date_to: dateTo, total: totalAmount, items: items.results, totals: totals.results };
+}
+
+async function expenseReport(env, url) {
+  return json(await expenseReportData(env, url));
+}
+
+async function expenseReportExcel(env, url) {
+  const data = await expenseReportData(env, url);
+  const rows = [
+    ["تقرير المصروفات", "", "", "", "", "", "", ""],
+    ["من", data.date_from, "إلى", data.date_to, "الإجمالي", data.total, "", ""],
+    [],
+    ["التاريخ", "الشهر", "النوع", "التصنيف", "رقم المصروف", "اسم المصروف", "المبلغ", "طريقة الدفع"],
+    ...data.items.map((item) => [
+      item.entry_date || "",
+      item.month || "",
+      item.expense_type || "",
+      item.expense_category || "",
+      item.expense_code || "",
+      item.expense_name || item.description || "",
+      item.amount || 0,
+      item.payment_method || "",
+    ]),
+    [],
+    ["إجماليات حسب وجه الصرف", "", "", "", "", "", "", ""],
+    ["التصنيف", "رقم المصروف", "اسم المصروف", "الإجمالي", "عدد العمليات", "", "", ""],
+    ...data.totals.map((item) => [
+      item.expense_category || "",
+      item.expense_code || "",
+      item.expense_name || "",
+      item.total || 0,
+      item.count || 0,
+      "", "", "",
+    ]),
+  ];
+  const xml = excelXml(rows);
+  return new Response(xml, {
+    headers: {
+      "content-type": "application/vnd.ms-excel; charset=utf-8",
+      "content-disposition": `attachment; filename="expenses-${data.date_from}-to-${data.date_to}.xls"`,
+    },
+  });
+}
+
+async function responsibleMonthlyReport(env) {
+  const result = await env.DB.prepare(
+    `WITH months(m) AS (VALUES (1),(2),(3),(4),(5),(6),(7),(8),(9),(10),(11),(12))
+     SELECT m AS month,
+       COALESCE((SELECT SUM(amount) FROM collections WHERE month=m AND responsible='نورا'),0) AS noura,
+       COALESCE((SELECT SUM(amount) FROM collections WHERE month=m AND responsible='محمد حسن'),0) AS mohamed_hassan,
+       COALESCE((SELECT SUM(amount) FROM collections WHERE month=m AND responsible='المصريه'),0) AS egyptian,
+       COALESCE((SELECT SUM(amount) FROM collections WHERE month=m),0) AS total
+     FROM months
+     ORDER BY m`
+  ).all();
+  return json({ items: result.results });
+}
+
+function excelXml(rows) {
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<?mso-application progid="Excel.Sheet"?>
+<Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet"
+ xmlns:o="urn:schemas-microsoft-com:office:office"
+ xmlns:x="urn:schemas-microsoft-com:office:excel"
+ xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet">
+ <Worksheet ss:Name="Report" ss:RightToLeft="1">
+  <Table>
+${rows.map((row) => `   <Row>${row.map((cell) => `<Cell><Data ss:Type="${typeof cell === "number" ? "Number" : "String"}">${xmlEscape(cell)}</Data></Cell>`).join("")}</Row>`).join("\n")}
+  </Table>
+ </Worksheet>
+</Workbook>`;
+}
+
+function xmlEscape(value) {
+  return String(value ?? "").replace(/[<>&'"]/g, (char) => ({
+    "<": "&lt;",
+    ">": "&gt;",
+    "&": "&amp;",
+    "'": "&apos;",
+    '"': "&quot;",
+  })[char]);
 }
 
 function transferData(payload) {
@@ -535,7 +673,7 @@ async function auditLog(env, user) {
 async function backup(env, user) {
   if (user.role !== "admin") throw new HttpError("Admins only", 403);
   const tables = {};
-  for (const table of ["users", "payment_methods", "collections", "expenses", "transfers", "audit_logs"]) {
+  for (const table of ["users", "payment_methods", "expense_accounts", "collections", "expenses", "transfers", "audit_logs"]) {
     const result = await env.DB.prepare(`SELECT * FROM ${table} ORDER BY id`).all();
     tables[table] = result.results.map((row) => {
       if (table !== "users") return row;
