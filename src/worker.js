@@ -53,6 +53,11 @@ async function handleApi(request, env, url) {
   if (url.pathname === "/api/reports/responsible-monthly" && method === "GET") return responsibleMonthlyReport(env);
   if (url.pathname === "/api/transfers" && method === "GET") return listTransfers(env);
   if (url.pathname === "/api/transfers" && method === "POST") return createTransfer(request, env, user);
+  if (url.pathname.startsWith("/api/transfers/")) {
+    const id = idFromPath(url.pathname);
+    if (method === "PUT") return updateTransfer(request, env, user, id);
+    if (method === "DELETE") return deleteRecord(env, user, "transfers", "transfer", id);
+  }
   if (url.pathname === "/api/backup" && method === "GET") return backup(env, user);
   if (url.pathname === "/api/audit" && method === "GET") return auditLog(env, user);
   if (url.pathname === "/api/users" && method === "GET") return users(env, user);
@@ -624,6 +629,15 @@ function expenseExcelXml(data) {
  xmlns:o="urn:schemas-microsoft-com:office:office"
  xmlns:x="urn:schemas-microsoft-com:office:excel"
  xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet">
+ <DocumentProperties xmlns="urn:schemas-microsoft-com:office:office">
+  <Title>تقرير المصروفات</Title>
+  <Author>تحصيلات</Author>
+  <Created>${xmlEscape(nowIso())}</Created>
+ </DocumentProperties>
+ <ExcelWorkbook xmlns="urn:schemas-microsoft-com:office:excel">
+  <ProtectStructure>False</ProtectStructure>
+  <ProtectWindows>False</ProtectWindows>
+ </ExcelWorkbook>
  <Styles>
   <Style ss:ID="Title"><Alignment ss:Horizontal="Center"/><Font ss:Bold="1" ss:Size="16"/><Interior ss:Color="#D9EAF7" ss:Pattern="Solid"/><Borders>${excelBorders()}</Borders></Style>
   <Style ss:ID="Section"><Alignment ss:Horizontal="Center"/><Font ss:Bold="1" ss:Size="13"/><Interior ss:Color="#E2F0D9" ss:Pattern="Solid"/><Borders>${excelBorders()}</Borders></Style>
@@ -632,7 +646,7 @@ function expenseExcelXml(data) {
   <Style ss:ID="Total"><Alignment ss:Horizontal="Center"/><Font ss:Bold="1"/><Interior ss:Color="#FFF2CC" ss:Pattern="Solid"/><Borders>${excelBorders()}</Borders></Style>
   <Style ss:ID="Normal"><Alignment ss:Horizontal="Center"/><Borders>${excelBorders()}</Borders></Style>
  </Styles>
- <Worksheet ss:Name="تقرير المصروفات" ss:RightToLeft="1">
+ <Worksheet ss:Name="تقرير المصروفات">
   <Table>
    <Column ss:Width="95"/>
    <Column ss:Width="260"/>
@@ -640,6 +654,17 @@ function expenseExcelXml(data) {
    <Column ss:Width="110"/>
 ${rows.join("\n")}
   </Table>
+  <WorksheetOptions xmlns="urn:schemas-microsoft-com:office:excel">
+   <DisplayRightToLeft/>
+   <Print>
+    <ValidPrinterInfo/>
+    <HorizontalResolution>600</HorizontalResolution>
+    <VerticalResolution>600</VerticalResolution>
+   </Print>
+   <Selected/>
+   <ProtectObjects>False</ProtectObjects>
+   <ProtectScenarios>False</ProtectScenarios>
+  </WorksheetOptions>
  </Worksheet>
 </Workbook>`;
 }
@@ -664,10 +689,13 @@ function excelXml(rows) {
  xmlns:o="urn:schemas-microsoft-com:office:office"
  xmlns:x="urn:schemas-microsoft-com:office:excel"
  xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet">
- <Worksheet ss:Name="Report" ss:RightToLeft="1">
+ <Worksheet ss:Name="Report">
   <Table>
 ${rows.map((row) => `   <Row>${row.map((cell) => `<Cell><Data ss:Type="${typeof cell === "number" ? "Number" : "String"}">${xmlEscape(cell)}</Data></Cell>`).join("")}</Row>`).join("\n")}
   </Table>
+  <WorksheetOptions xmlns="urn:schemas-microsoft-com:office:excel">
+   <DisplayRightToLeft/>
+  </WorksheetOptions>
  </Worksheet>
 </Workbook>`;
 }
@@ -724,6 +752,28 @@ async function createTransfer(request, env, user) {
   ).bind(data.entry_date, data.source_method, data.target_method, data.amount, data.note, user.id, nowIso()).run();
   await insertAudit(env, request, user, "INSERT", "transfers", result.meta.last_row_id, null, data);
   return json({ id: result.meta.last_row_id });
+}
+
+async function updateTransfer(request, env, user, id) {
+  assertCanWrite(user);
+  const before = await env.DB.prepare("SELECT * FROM transfers WHERE id = ?").bind(id).first();
+  if (!before) throw new HttpError("Record not found", 404);
+  const data = transferData(await readJson(request));
+  validateTransfer(data);
+  const currentSourceBalance = await methodBalance(env, data.source_method);
+  const available = currentSourceBalance
+    + (before.source_method === data.source_method ? Number(before.amount || 0) : 0)
+    - (before.target_method === data.source_method ? Number(before.amount || 0) : 0);
+  if (data.amount > available) {
+    throw new HttpError(`الرصيد المتاح في المصدر ${available} ولا يكفي للتوسيط`, 400);
+  }
+  await env.DB.prepare(
+    `UPDATE transfers
+     SET entry_date=?, source_method=?, target_method=?, amount=?, note=?
+     WHERE id=?`
+  ).bind(data.entry_date, data.source_method, data.target_method, data.amount, data.note, id).run();
+  await insertAudit(env, request, user, "UPDATE", "transfers", id, before, data);
+  return json({ ok: true });
 }
 
 async function auditLog(env, user) {

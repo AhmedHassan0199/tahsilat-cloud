@@ -259,19 +259,23 @@
       <section id="transfers" class="tab-panel">
         <div class="entry-layout">
           <form id="transferForm" class="form-panel">
-            <h2>توسيط بين طرق الدفع</h2>
+            <h2 id="transferFormTitle">توسيط بين طرق الدفع</h2>
+            <input type="hidden" name="id">
             <label>التاريخ<input name="entry_date" type="date"></label>
             <label>من طريقة دفع<select name="source_method"></select></label>
             <label>إلى طريقة دفع<select name="target_method"></select></label>
             <label>المبلغ<input name="amount" type="number" min="0" step="0.01" required></label>
             <label class="wide">ملاحظة<textarea name="note" rows="2"></textarea></label>
-            <div class="form-actions"><button type="submit">تنفيذ التوسيط</button></div>
+            <div class="form-actions">
+              <button type="submit">حفظ</button>
+              <button type="button" class="secondary" id="cancelTransferEdit">إلغاء</button>
+            </div>
           </form>
           <div class="panel">
             <div class="panel-head"><h2>سجل التوسيط</h2></div>
             <div class="table-wrap records">
               <table>
-                <thead><tr><th>التاريخ</th><th>من</th><th>إلى</th><th>المبلغ</th><th>المستخدم</th><th>ملاحظة</th></tr></thead>
+                <thead><tr><th>التاريخ</th><th>من</th><th>إلى</th><th>المبلغ</th><th>المستخدم</th><th>ملاحظة</th><th></th></tr></thead>
                 <tbody id="transferRows"></tbody>
               </table>
             </div>

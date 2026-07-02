@@ -274,8 +274,12 @@ function renderTransfers() {
       <td data-label="المبلغ">${money(item.amount)}</td>
       <td data-label="المستخدم">${item.created_by_name || "-"}</td>
       <td data-label="ملاحظة">${item.note || "-"}</td>
+      <td class="actions">
+        <button type="button" data-edit-transfer="${item.id}" title="تعديل">✎</button>
+        <button class="danger" type="button" data-delete-transfer="${item.id}" title="حذف">×</button>
+      </td>
     </tr>
-  `).join("") || `<tr><td colspan="6" class="muted">لا توجد عمليات توسيط</td></tr>`;
+  `).join("") || `<tr><td colspan="7" class="muted">لا توجد عمليات توسيط</td></tr>`;
 }
 
 function renderUsers() {
@@ -503,11 +507,17 @@ async function saveExpense(event) {
 async function saveTransfer(event) {
   event.preventDefault();
   const form = event.currentTarget;
-  await api("/api/transfers", { method: "POST", body: JSON.stringify(formData(form)) });
-  form.reset();
-  fillSelect(form.source_method, state.paymentMethods);
-  fillSelect(form.target_method, state.paymentMethods);
-  showToast("تم تنفيذ التوسيط");
+  const data = formData(form);
+  const id = data.id;
+  delete data.id;
+  if (id) {
+    await api(`/api/transfers/${id}`, { method: "PUT", body: JSON.stringify(data) });
+    showToast("تم تعديل التوسيط");
+  } else {
+    await api("/api/transfers", { method: "POST", body: JSON.stringify(data) });
+    showToast("تم تنفيذ التوسيط");
+  }
+  resetTransferForm();
   await Promise.all([loadDashboard(), loadTransfers(), loadAudit()]);
 }
 
@@ -568,14 +578,38 @@ function editExpense(id) {
   form.scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
+function resetTransferForm() {
+  const form = qs("#transferForm");
+  form.reset();
+  form.elements.id.value = "";
+  fillSelect(form.source_method, state.paymentMethods);
+  fillSelect(form.target_method, state.paymentMethods);
+  qs("#transferFormTitle").textContent = "توسيط بين طرق الدفع";
+}
+
+function editTransfer(id) {
+  const item = state.transfers.find((row) => String(row.id) === String(id));
+  if (!item) return;
+  const form = qs("#transferForm");
+  form.elements.id.value = item.id;
+  form.entry_date.value = item.entry_date || "";
+  form.source_method.value = item.source_method;
+  form.target_method.value = item.target_method;
+  form.amount.value = item.amount;
+  form.note.value = item.note || "";
+  qs("#transferFormTitle").textContent = `تعديل توسيط #${item.id}`;
+  form.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
 async function removeRecord(kind, id) {
-  const label = kind === "collections" ? "التحصيل" : "المصروف";
+  const labels = { collections: "التحصيل", expenses: "المصروف", transfers: "التوسيط" };
+  const label = labels[kind] || "السجل";
   if (!confirm(`حذف ${label} رقم ${id}؟`)) return;
   await api(`/api/${kind}/${id}`, { method: "DELETE" });
   showToast("تم الحذف");
   await Promise.all([
     loadDashboard(),
-    kind === "collections" ? loadCollections() : loadExpenses(),
+    kind === "collections" ? loadCollections() : kind === "expenses" ? loadExpenses() : loadTransfers(),
     loadAudit(),
   ]);
 }
@@ -639,6 +673,7 @@ function bindEvents() {
   qs("#userForm").addEventListener("submit", (event) => saveUser(event).catch((error) => showToast(error.message, true)));
   qs("#cancelCollectionEdit").addEventListener("click", resetCollectionForm);
   qs("#cancelExpenseEdit").addEventListener("click", resetExpenseForm);
+  qs("#cancelTransferEdit").addEventListener("click", resetTransferForm);
 
   qs("#methodForm").addEventListener("submit", async (event) => {
     event.preventDefault();
@@ -663,10 +698,14 @@ function bindEvents() {
     const collectionDelete = event.target.closest("[data-delete-collection]");
     const expenseEdit = event.target.closest("[data-edit-expense]");
     const expenseDelete = event.target.closest("[data-delete-expense]");
+    const transferEdit = event.target.closest("[data-edit-transfer]");
+    const transferDelete = event.target.closest("[data-delete-transfer]");
     if (collectionEdit) editCollection(collectionEdit.dataset.editCollection);
     if (collectionDelete) removeRecord("collections", collectionDelete.dataset.deleteCollection).catch((error) => showToast(error.message, true));
     if (expenseEdit) editExpense(expenseEdit.dataset.editExpense);
     if (expenseDelete) removeRecord("expenses", expenseDelete.dataset.deleteExpense).catch((error) => showToast(error.message, true));
+    if (transferEdit) editTransfer(transferEdit.dataset.editTransfer);
+    if (transferDelete) removeRecord("transfers", transferDelete.dataset.deleteTransfer).catch((error) => showToast(error.message, true));
   });
 }
 
