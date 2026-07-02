@@ -2,6 +2,7 @@ const state = {
   paymentMethods: [],
   expenseAccounts: [],
   collectionTypes: [],
+  customers: [],
   responsibles: [],
   dashboard: null,
   collections: [],
@@ -88,6 +89,21 @@ function fillSelect(select, values, current = "") {
     const option = document.createElement("option");
     option.value = typeof value === "string" ? value : value.name;
     option.textContent = typeof value === "string" ? value : value.name;
+    select.appendChild(option);
+  });
+  if (current) select.value = current;
+}
+
+function fillCustomerSelect(select, current = "") {
+  select.innerHTML = "";
+  const placeholder = document.createElement("option");
+  placeholder.value = "";
+  placeholder.textContent = "اختر العميل";
+  select.appendChild(placeholder);
+  state.customers.forEach((customer) => {
+    const option = document.createElement("option");
+    option.value = customer.id;
+    option.textContent = customer.name;
     select.appendChild(option);
   });
   if (current) select.value = current;
@@ -244,6 +260,19 @@ function renderCollections() {
   `).join("") || `<tr><td colspan="8" class="muted">لا توجد تحصيلات مطابقة</td></tr>`;
 }
 
+function renderCustomers() {
+  const body = qs("#customerRows");
+  if (!body) return;
+  body.innerHTML = state.customers.map((item) => `
+    <tr>
+      <td data-label="العميل">${item.name}</td>
+      <td data-label="إجمالي التحصيل">${money(item.total_collections)}</td>
+      <td data-label="عدد التحصيلات">${money(item.collection_count)}</td>
+      <td data-label="آخر تحصيل">${item.last_collection_date || "-"}</td>
+    </tr>
+  `).join("") || `<tr><td colspan="4" class="muted">لا توجد بيانات عملاء</td></tr>`;
+}
+
 function renderExpenses() {
   qs("#expenseRows").innerHTML = state.expenses.map((item) => `
     <tr>
@@ -365,10 +394,12 @@ async function loadBootstrap() {
   const data = await api("/api/bootstrap");
   state.paymentMethods = data.payment_methods;
   state.expenseAccounts = data.expense_accounts || [];
+  state.customers = data.customers || [];
   state.collectionTypes = data.collection_types || [];
   state.responsibles = data.responsibles;
   state.user = data.user;
   qsa('select[name="responsible"]').forEach((select) => fillSelect(select, state.responsibles));
+  qsa('select[name="customer_id"]').forEach((select) => fillCustomerSelect(select, select.value));
   qsa('select[name="collection_type"]').forEach((select) => fillSelect(select, state.collectionTypes, select.value));
   qsa('select[name="payment_method"]').forEach((select) => fillSelect(select, state.paymentMethods));
   qsa('select[name="expense_account_id"]').forEach((select) => fillExpenseAccountSelect(select, select.value));
@@ -389,6 +420,13 @@ async function loadCollections() {
   const data = await api(`/api/collections?${collectionQuery()}`);
   state.collections = data.items;
   renderCollections();
+}
+
+async function loadCustomers() {
+  const data = await api("/api/customers");
+  state.customers = data.items;
+  renderCustomers();
+  qsa('select[name="customer_id"]').forEach((select) => fillCustomerSelect(select, select.value));
 }
 
 async function loadExpenses() {
@@ -452,7 +490,7 @@ async function loadResponsibleMonthly() {
 
 async function reloadAll() {
   await loadBootstrap();
-  await Promise.all([loadDashboard(), loadCollections(), loadExpenses(), loadTransfers(), loadUsers(), loadAudit(), loadExpenseReport(), loadResponsibleMonthly()]);
+  await Promise.all([loadDashboard(), loadCollections(), loadCustomers(), loadExpenses(), loadTransfers(), loadUsers(), loadAudit(), loadExpenseReport(), loadResponsibleMonthly()]);
 }
 
 function formData(form) {
@@ -469,6 +507,7 @@ function resetCollectionForm() {
   form.elements.id.value = "";
   qs("#collectionFormTitle").textContent = "إضافة تحصيل";
   fillSelect(form.responsible, state.responsibles);
+  fillCustomerSelect(form.customer_id);
   fillSelect(form.collection_type, state.collectionTypes);
   fillSelect(form.payment_method, state.paymentMethods);
   toggleCollectionOtherType();
@@ -498,7 +537,16 @@ async function saveCollection(event) {
     showToast("تم حفظ التحصيل");
   }
   resetCollectionForm();
-  await Promise.all([loadDashboard(), loadCollections(), loadAudit()]);
+  await Promise.all([loadDashboard(), loadCollections(), loadCustomers(), loadAudit()]);
+}
+
+async function saveCustomer(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  await api("/api/customers", { method: "POST", body: JSON.stringify(formData(form)) });
+  form.reset();
+  showToast("تم إضافة العميل");
+  await Promise.all([loadBootstrap(), loadCustomers(), loadAudit()]);
 }
 
 async function saveExpense(event) {
@@ -567,7 +615,7 @@ function editCollection(id) {
   form.entry_date.value = item.entry_date || "";
   form.month.value = item.month || "";
   form.responsible.value = item.responsible;
-  form.client_name.value = item.client_name;
+  fillCustomerSelect(form.customer_id, item.customer_id || "");
   if (state.collectionTypes.includes(item.collection_type)) {
     form.collection_type.value = item.collection_type;
     form.collection_type_other.value = "";
@@ -632,6 +680,7 @@ async function removeRecord(kind, id) {
   await Promise.all([
     loadDashboard(),
     kind === "collections" ? loadCollections() : kind === "expenses" ? loadExpenses() : loadTransfers(),
+    kind === "collections" ? loadCustomers() : Promise.resolve(),
     loadAudit(),
   ]);
 }
@@ -690,6 +739,7 @@ function bindEvents() {
   });
 
   qs("#collectionForm").addEventListener("submit", (event) => saveCollection(event).catch((error) => showToast(error.message, true)));
+  qs("#customerForm").addEventListener("submit", (event) => saveCustomer(event).catch((error) => showToast(error.message, true)));
   qs("#expenseForm").addEventListener("submit", (event) => saveExpense(event).catch((error) => showToast(error.message, true)));
   qs("#transferForm").addEventListener("submit", (event) => saveTransfer(event).catch((error) => showToast(error.message, true)));
   qs("#userForm").addEventListener("submit", (event) => saveUser(event).catch((error) => showToast(error.message, true)));

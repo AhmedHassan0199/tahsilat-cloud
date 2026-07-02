@@ -53,6 +53,8 @@ async function handleApi(request, env, url) {
     if (method === "PUT") return updateExpense(request, env, user, id);
     if (method === "DELETE") return deleteRecord(env, user, "expenses", "expense", id);
   }
+  if (url.pathname === "/api/customers" && method === "GET") return listCustomers(env);
+  if (url.pathname === "/api/customers" && method === "POST") return createCustomer(request, env, user);
   if (url.pathname === "/api/payment-methods" && method === "GET") return paymentMethods(env);
   if (url.pathname === "/api/payment-methods" && method === "POST") return createPaymentMethod(request, env, user);
   if (url.pathname === "/api/expense-accounts" && method === "GET") return expenseAccounts(env);
@@ -85,6 +87,7 @@ async function health(env) {
   checks.users = await env.DB.prepare("SELECT COUNT(*) AS count FROM users").first();
   checks.sessions = await env.DB.prepare("SELECT COUNT(*) AS count FROM sessions").first();
   checks.collections = await env.DB.prepare("SELECT COUNT(*) AS count FROM collections").first();
+  checks.customers = await env.DB.prepare("SELECT COUNT(*) AS count FROM customers").first().catch(() => ({ count: "migration_needed" }));
   checks.transfers = await env.DB.prepare("SELECT COUNT(*) AS count FROM transfers").first().catch(() => ({ count: "migration_needed" }));
   checks.expense_accounts = await env.DB.prepare("SELECT COUNT(*) AS count FROM expense_accounts").first().catch(() => ({ count: "migration_needed" }));
   checks.payment_methods = await env.DB.prepare("SELECT COUNT(*) AS count FROM payment_methods").first();
@@ -234,10 +237,12 @@ function publicUser(user) {
 async function bootstrap(env, user) {
   const paymentMethods = await env.DB.prepare("SELECT id, name, note FROM payment_methods WHERE active = 1 ORDER BY name").all();
   const expenseAccounts = await env.DB.prepare("SELECT id, category, code, name FROM expense_accounts WHERE active = 1 ORDER BY category DESC, CAST(code AS INTEGER)").all().catch(() => ({ results: [] }));
+  const customers = await env.DB.prepare("SELECT id, name FROM customers WHERE active = 1 ORDER BY name").all().catch(() => ({ results: [] }));
   const users = await env.DB.prepare("SELECT id, username, display_name, role, active, created_at FROM users ORDER BY username").all();
   return json({
     payment_methods: paymentMethods.results,
     expense_accounts: expenseAccounts.results,
+    customers: customers.results,
     users: users.results,
     responsibles: RESPONSIBLES,
     collection_types: COLLECTION_TYPES,
@@ -343,6 +348,7 @@ function collectionData(payload) {
     entry_date: entryDate,
     month,
     responsible: String(payload.responsible || "").trim(),
+    customer_id: Number(payload.customer_id || 0) || null,
     client_name: String(payload.client_name || "").trim(),
     collection_type: collectionType || null,
     collection_type_other: selectedType === "أخرى" ? otherType || null : null,
@@ -373,9 +379,18 @@ function expenseData(payload) {
 
 function validateCollection(data) {
   if (!data.responsible) throw new HttpError("المسؤول مطلوب", 400);
+  if (!data.customer_id) throw new HttpError("العميل مطلوب", 400);
   if (!data.client_name) throw new HttpError("اسم العميل مطلوب", 400);
   if (!data.collection_type) throw new HttpError("نوع التحصيل مطلوب", 400);
   if (!Number.isFinite(data.amount) || data.amount <= 0) throw new HttpError("قيمة التحصيل يجب أن تكون أكبر من صفر", 400);
+}
+
+async function applyCustomer(env, data) {
+  if (!data.customer_id) return data;
+  const customer = await env.DB.prepare("SELECT id, name FROM customers WHERE id = ? AND active = 1").bind(data.customer_id).first();
+  if (!customer) throw new HttpError("العميل غير صحيح", 400);
+  data.client_name = customer.name;
+  return data;
 }
 
 function validateExpense(data) {
@@ -396,6 +411,21 @@ async function applyExpenseAccount(env, data) {
 
 function truthy(value) {
   return value === true || value === 1 || value === "1" || value === "true" || value === "نعم";
+}
+
+function normalizeCustomerName(value) {
+  return String(value || "")
+    .replace(/\u00a0/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function normalizedCustomerKey(value) {
+  return normalizeCustomerName(value)
+    .replace(/[إأآا]/g, "ا")
+    .replace(/ى/g, "ي")
+    .replace(/ة/g, "ه")
+    .toLowerCase();
 }
 
 function filters(url, kind) {
@@ -434,15 +464,47 @@ async function listCollections(env, url) {
   return json({ items: result.results });
 }
 
+async function listCustomers(env) {
+  const result = await env.DB.prepare(
+    `SELECT customers.id, customers.name, customers.active, customers.created_at,
+            COALESCE(SUM(collections.amount), 0) AS total_collections,
+            COUNT(collections.id) AS collection_count,
+            MAX(collections.entry_date) AS last_collection_date
+     FROM customers
+     LEFT JOIN collections ON collections.customer_id = customers.id
+     WHERE customers.active = 1
+     GROUP BY customers.id
+     ORDER BY total_collections DESC, collection_count DESC, customers.name`
+  ).all();
+  return json({ items: result.results });
+}
+
+async function createCustomer(request, env, user) {
+  assertCanWrite(user);
+  const payload = await readJson(request);
+  const name = normalizeCustomerName(payload.name || "");
+  if (!name) throw new HttpError("اسم العميل مطلوب", 400);
+  const normalized = normalizedCustomerKey(name);
+  const now = nowIso();
+  const result = await env.DB.prepare(
+    `INSERT INTO customers(name, normalized_name, active, created_at, updated_at)
+     VALUES(?, ?, 1, ?, ?)
+     ON CONFLICT(normalized_name) DO UPDATE SET active=1, name=excluded.name, updated_at=excluded.updated_at`
+  ).bind(name, normalized, now, now).run();
+  const customer = await env.DB.prepare("SELECT id, name FROM customers WHERE normalized_name = ?").bind(normalized).first();
+  await insertAudit(env, request, user, "INSERT", "customers", customer?.id || result.meta.last_row_id || null, null, { name, normalized_name: normalized });
+  return json({ id: customer?.id || result.meta.last_row_id, name });
+}
+
 async function createCollection(request, env, user) {
   assertCanWrite(user);
-  const data = collectionData(await readJson(request));
+  const data = await applyCustomer(env, collectionData(await readJson(request)));
   validateCollection(data);
   const now = nowIso();
   const result = await env.DB.prepare(
-    `INSERT INTO collections(entry_date, month, responsible, client_name, collection_type, collection_type_other, amount, payment_method, note, created_at, updated_at)
-     VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-  ).bind(data.entry_date, data.month, data.responsible, data.client_name, data.collection_type, data.collection_type_other, data.amount, data.payment_method, data.note, now, now).run();
+    `INSERT INTO collections(entry_date, month, responsible, customer_id, client_name, collection_type, collection_type_other, amount, payment_method, note, created_at, updated_at)
+     VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).bind(data.entry_date, data.month, data.responsible, data.customer_id, data.client_name, data.collection_type, data.collection_type_other, data.amount, data.payment_method, data.note, now, now).run();
   await insertAudit(env, request, user, "INSERT", "collections", result.meta.last_row_id, null, data);
   return json({ id: result.meta.last_row_id });
 }
@@ -451,13 +513,13 @@ async function updateCollection(request, env, user, id) {
   assertCanWrite(user);
   const before = await env.DB.prepare("SELECT * FROM collections WHERE id = ?").bind(id).first();
   if (!before) throw new HttpError("Record not found", 404);
-  const data = collectionData(await readJson(request));
+  const data = await applyCustomer(env, collectionData(await readJson(request)));
   validateCollection(data);
   await env.DB.prepare(
     `UPDATE collections
-     SET entry_date=?, month=?, responsible=?, client_name=?, collection_type=?, collection_type_other=?, amount=?, payment_method=?, note=?, updated_at=?
+     SET entry_date=?, month=?, responsible=?, customer_id=?, client_name=?, collection_type=?, collection_type_other=?, amount=?, payment_method=?, note=?, updated_at=?
      WHERE id=?`
-  ).bind(data.entry_date, data.month, data.responsible, data.client_name, data.collection_type, data.collection_type_other, data.amount, data.payment_method, data.note, nowIso(), id).run();
+  ).bind(data.entry_date, data.month, data.responsible, data.customer_id, data.client_name, data.collection_type, data.collection_type_other, data.amount, data.payment_method, data.note, nowIso(), id).run();
   await insertAudit(env, request, user, "UPDATE", "collections", id, before, data);
   return json({ ok: true });
 }
@@ -956,7 +1018,7 @@ async function auditLog(env, user) {
 async function backup(env, user) {
   if (user.role !== "admin") throw new HttpError("Admins only", 403);
   const tables = {};
-  for (const table of ["users", "payment_methods", "expense_accounts", "collections", "expenses", "transfers", "audit_logs"]) {
+  for (const table of ["users", "payment_methods", "expense_accounts", "customers", "collections", "expenses", "transfers", "audit_logs"]) {
     const result = await env.DB.prepare(`SELECT * FROM ${table} ORDER BY id`).all();
     tables[table] = result.results.map((row) => {
       if (table !== "users") return row;
