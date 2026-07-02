@@ -5,6 +5,7 @@ const JSON_HEADERS = { "content-type": "application/json; charset=utf-8" };
 
 const RESPONSIBLES = ["نورا", "محمد حسن", "المصريه"];
 const COLLECTION_TYPES = ["كرومو", "منتج تام علب", "منتج تام اكواب", "قص", "طباعة", "دشت", "أخرى"];
+const CUSTODY_METHOD = "عهدة";
 const CRC32_TABLE = Array.from({ length: 256 }, (_, index) => {
   let value = index;
   for (let bit = 0; bit < 8; bit += 1) {
@@ -88,6 +89,7 @@ async function health(env) {
   checks.sessions = await env.DB.prepare("SELECT COUNT(*) AS count FROM sessions").first();
   checks.collections = await env.DB.prepare("SELECT COUNT(*) AS count FROM collections").first();
   checks.customers = await env.DB.prepare("SELECT COUNT(*) AS count FROM customers").first().catch(() => ({ count: "migration_needed" }));
+  checks.custody_holders = await env.DB.prepare("SELECT COUNT(*) AS count FROM custody_holders").first().catch(() => ({ count: "migration_needed" }));
   checks.transfers = await env.DB.prepare("SELECT COUNT(*) AS count FROM transfers").first().catch(() => ({ count: "migration_needed" }));
   checks.expense_accounts = await env.DB.prepare("SELECT COUNT(*) AS count FROM expense_accounts").first().catch(() => ({ count: "migration_needed" }));
   checks.payment_methods = await env.DB.prepare("SELECT COUNT(*) AS count FROM payment_methods").first();
@@ -238,11 +240,13 @@ async function bootstrap(env, user) {
   const paymentMethods = await env.DB.prepare("SELECT id, name, note FROM payment_methods WHERE active = 1 ORDER BY name").all();
   const expenseAccounts = await env.DB.prepare("SELECT id, category, code, name FROM expense_accounts WHERE active = 1 ORDER BY category DESC, CAST(code AS INTEGER)").all().catch(() => ({ results: [] }));
   const customers = await env.DB.prepare("SELECT id, name FROM customers WHERE active = 1 ORDER BY name").all().catch(() => ({ results: [] }));
+  const custodyHolders = await env.DB.prepare("SELECT id, name FROM custody_holders WHERE active = 1 ORDER BY name").all().catch(() => ({ results: [] }));
   const users = await env.DB.prepare("SELECT id, username, display_name, role, active, created_at FROM users ORDER BY username").all();
   return json({
     payment_methods: paymentMethods.results,
     expense_accounts: expenseAccounts.results,
     customers: customers.results,
+    custody_holders: custodyHolders.results,
     users: users.results,
     responsibles: RESPONSIBLES,
     collection_types: COLLECTION_TYPES,
@@ -354,6 +358,7 @@ function collectionData(payload) {
     collection_type_other: selectedType === "أخرى" ? otherType || null : null,
     amount: Number(payload.amount || 0),
     payment_method: String(payload.payment_method || "غير محدد").trim(),
+    custody_holder: String(payload.custody_holder || "").trim(),
     note: String(payload.note || "").trim() || null,
   };
 }
@@ -428,6 +433,57 @@ function normalizedCustomerKey(value) {
     .toLowerCase();
 }
 
+function normalizeCustodyName(value) {
+  return normalizeCustomerName(value);
+}
+
+function normalizedCustodyKey(value) {
+  return normalizedCustomerKey(value);
+}
+
+function isCustodyMethod(value) {
+  return value === CUSTODY_METHOD || String(value || "").startsWith(`${CUSTODY_METHOD} - `);
+}
+
+function custodyMethodName(holderName) {
+  return `${CUSTODY_METHOD} - ${holderName}`;
+}
+
+async function ensureCustodyHolder(env, name) {
+  const cleanName = normalizeCustodyName(name);
+  if (!cleanName) throw new HttpError("اسم صاحب العهدة مطلوب", 400);
+  const normalized = normalizedCustodyKey(cleanName);
+  const now = nowIso();
+  await env.DB.prepare(
+    `INSERT INTO custody_holders(name, normalized_name, active, created_at, updated_at)
+     VALUES(?, ?, 1, ?, ?)
+     ON CONFLICT(normalized_name) DO UPDATE SET active=1, name=excluded.name, updated_at=excluded.updated_at`
+  ).bind(cleanName, normalized, now, now).run();
+  return cleanName;
+}
+
+async function applyCollectionCustody(env, data) {
+  if (!isCustodyMethod(data.payment_method)) return data;
+  const holderName = await ensureCustodyHolder(env, data.custody_holder || data.payment_method.replace(`${CUSTODY_METHOD} - `, ""));
+  data.custody_holder = holderName;
+  data.payment_method = custodyMethodName(holderName);
+  return data;
+}
+
+async function applyTransferCustody(env, data) {
+  if (isCustodyMethod(data.source_method)) {
+    const holderName = await ensureCustodyHolder(env, data.source_custody_holder || data.source_method.replace(`${CUSTODY_METHOD} - `, ""));
+    data.source_custody_holder = holderName;
+    data.source_method = custodyMethodName(holderName);
+  }
+  if (isCustodyMethod(data.target_method)) {
+    const holderName = await ensureCustodyHolder(env, data.target_custody_holder || data.target_method.replace(`${CUSTODY_METHOD} - `, ""));
+    data.target_custody_holder = holderName;
+    data.target_method = custodyMethodName(holderName);
+  }
+  return data;
+}
+
 function filters(url, kind) {
   const clauses = [];
   const binds = [];
@@ -498,7 +554,7 @@ async function createCustomer(request, env, user) {
 
 async function createCollection(request, env, user) {
   assertCanWrite(user);
-  const data = await applyCustomer(env, collectionData(await readJson(request)));
+  const data = await applyCollectionCustody(env, await applyCustomer(env, collectionData(await readJson(request))));
   validateCollection(data);
   const now = nowIso();
   const result = await env.DB.prepare(
@@ -513,7 +569,7 @@ async function updateCollection(request, env, user, id) {
   assertCanWrite(user);
   const before = await env.DB.prepare("SELECT * FROM collections WHERE id = ?").bind(id).first();
   if (!before) throw new HttpError("Record not found", 404);
-  const data = await applyCustomer(env, collectionData(await readJson(request)));
+  const data = await applyCollectionCustody(env, await applyCustomer(env, collectionData(await readJson(request))));
   validateCollection(data);
   await env.DB.prepare(
     `UPDATE collections
@@ -948,6 +1004,8 @@ function transferData(payload) {
     entry_date: parseDateValue(payload.entry_date) || new Date().toISOString().slice(0, 10),
     source_method: String(payload.source_method || "").trim(),
     target_method: String(payload.target_method || "").trim(),
+    source_custody_holder: String(payload.source_custody_holder || "").trim(),
+    target_custody_holder: String(payload.target_custody_holder || "").trim(),
     amount: Number(payload.amount || 0),
     note: String(payload.note || "").trim() || null,
   };
@@ -973,7 +1031,7 @@ async function listTransfers(env) {
 
 async function createTransfer(request, env, user) {
   assertCanWrite(user);
-  const data = transferData(await readJson(request));
+  const data = await applyTransferCustody(env, transferData(await readJson(request)));
   validateTransfer(data);
   const available = await methodBalance(env, data.source_method);
   if (data.amount > available) {
@@ -991,7 +1049,7 @@ async function updateTransfer(request, env, user, id) {
   assertCanWrite(user);
   const before = await env.DB.prepare("SELECT * FROM transfers WHERE id = ?").bind(id).first();
   if (!before) throw new HttpError("Record not found", 404);
-  const data = transferData(await readJson(request));
+  const data = await applyTransferCustody(env, transferData(await readJson(request)));
   validateTransfer(data);
   const currentSourceBalance = await methodBalance(env, data.source_method);
   const available = currentSourceBalance
@@ -1018,7 +1076,7 @@ async function auditLog(env, user) {
 async function backup(env, user) {
   if (user.role !== "admin") throw new HttpError("Admins only", 403);
   const tables = {};
-  for (const table of ["users", "payment_methods", "expense_accounts", "customers", "collections", "expenses", "transfers", "audit_logs"]) {
+  for (const table of ["users", "payment_methods", "expense_accounts", "customers", "custody_holders", "collections", "expenses", "transfers", "audit_logs"]) {
     const result = await env.DB.prepare(`SELECT * FROM ${table} ORDER BY id`).all();
     tables[table] = result.results.map((row) => {
       if (table !== "users") return row;

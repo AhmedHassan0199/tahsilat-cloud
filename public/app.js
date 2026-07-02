@@ -3,6 +3,7 @@ const state = {
   expenseAccounts: [],
   collectionTypes: [],
   customers: [],
+  custodyHolders: [],
   responsibles: [],
   dashboard: null,
   collections: [],
@@ -109,6 +110,22 @@ function fillCustomerSelect(select, current = "") {
   if (current) select.value = current;
 }
 
+function fillCustodyDatalist() {
+  const list = qs("#custodyHolderOptions");
+  if (!list) return;
+  list.innerHTML = state.custodyHolders.map((item) => `<option value="${escapeHtml(item.name)}"></option>`).join("");
+}
+
+function splitCustodyMethod(value) {
+  const text = String(value || "");
+  if (!text.startsWith("عهدة - ")) return { method: text, holder: "" };
+  return { method: "عهدة", holder: text.slice("عهدة - ".length).trim() };
+}
+
+function isCustodySelected(value) {
+  return splitCustodyMethod(value).method === "عهدة";
+}
+
 function fillExpenseAccountSelect(select, current = "") {
   select.innerHTML = "";
   const placeholder = document.createElement("option");
@@ -157,6 +174,26 @@ function toggleCollectionOtherType() {
   qs("#collectionTypeOtherWrap").classList.toggle("hidden", !isOther);
   form.collection_type_other.required = isOther;
   if (!isOther) form.collection_type_other.value = "";
+}
+
+function toggleCollectionCustody() {
+  const form = qs("#collectionForm");
+  const isCustody = isCustodySelected(form.payment_method.value);
+  qs("#collectionCustodyWrap").classList.toggle("hidden", !isCustody);
+  form.custody_holder.required = isCustody;
+  if (!isCustody) form.custody_holder.value = "";
+}
+
+function toggleTransferCustody() {
+  const form = qs("#transferForm");
+  const sourceCustody = isCustodySelected(form.source_method.value);
+  const targetCustody = isCustodySelected(form.target_method.value);
+  qs("#sourceCustodyWrap").classList.toggle("hidden", !sourceCustody);
+  qs("#targetCustodyWrap").classList.toggle("hidden", !targetCustody);
+  form.source_custody_holder.required = sourceCustody;
+  form.target_custody_holder.required = targetCustody;
+  if (!sourceCustody) form.source_custody_holder.value = "";
+  if (!targetCustody) form.target_custody_holder.value = "";
 }
 
 function addMonthOptions() {
@@ -395,6 +432,7 @@ async function loadBootstrap() {
   state.paymentMethods = data.payment_methods;
   state.expenseAccounts = data.expense_accounts || [];
   state.customers = data.customers || [];
+  state.custodyHolders = data.custody_holders || [];
   state.collectionTypes = data.collection_types || [];
   state.responsibles = data.responsibles;
   state.user = data.user;
@@ -406,6 +444,7 @@ async function loadBootstrap() {
   fillExpenseReportCodes();
   qsa('select[name="source_method"]').forEach((select) => fillSelect(select, state.paymentMethods));
   qsa('select[name="target_method"]').forEach((select) => fillSelect(select, state.paymentMethods));
+  fillCustodyDatalist();
   qsa(".admin-only").forEach((item) => item.classList.toggle("hidden", state.user?.role !== "admin"));
   qs("#statusLine").textContent = "نسخة Cloudflare العامة";
   qs("#currentUser").textContent = state.user ? `${state.user.display_name} (${state.user.role})` : "";
@@ -511,6 +550,7 @@ function resetCollectionForm() {
   fillSelect(form.collection_type, state.collectionTypes);
   fillSelect(form.payment_method, state.paymentMethods);
   toggleCollectionOtherType();
+  toggleCollectionCustody();
 }
 
 function resetExpenseForm() {
@@ -537,7 +577,7 @@ async function saveCollection(event) {
     showToast("تم حفظ التحصيل");
   }
   resetCollectionForm();
-  await Promise.all([loadDashboard(), loadCollections(), loadCustomers(), loadAudit()]);
+  await Promise.all([loadBootstrap(), loadDashboard(), loadCollections(), loadCustomers(), loadAudit()]);
 }
 
 async function saveCustomer(event) {
@@ -580,7 +620,7 @@ async function saveTransfer(event) {
     showToast("تم تنفيذ التوسيط");
   }
   resetTransferForm();
-  await Promise.all([loadDashboard(), loadTransfers(), loadAudit()]);
+  await Promise.all([loadBootstrap(), loadDashboard(), loadTransfers(), loadAudit()]);
 }
 
 async function saveUser(event) {
@@ -625,7 +665,10 @@ function editCollection(id) {
   }
   toggleCollectionOtherType();
   form.amount.value = item.amount;
-  form.payment_method.value = item.payment_method;
+  const collectionMethod = splitCustodyMethod(item.payment_method);
+  form.payment_method.value = collectionMethod.method;
+  form.custody_holder.value = collectionMethod.holder;
+  toggleCollectionCustody();
   form.note.value = item.note || "";
   qs("#collectionFormTitle").textContent = `تعديل تحصيل #${item.id}`;
   form.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -654,6 +697,7 @@ function resetTransferForm() {
   form.elements.id.value = "";
   fillSelect(form.source_method, state.paymentMethods);
   fillSelect(form.target_method, state.paymentMethods);
+  toggleTransferCustody();
   qs("#transferFormTitle").textContent = "توسيط بين طرق الدفع";
 }
 
@@ -663,8 +707,13 @@ function editTransfer(id) {
   const form = qs("#transferForm");
   form.elements.id.value = item.id;
   form.entry_date.value = item.entry_date || "";
-  form.source_method.value = item.source_method;
-  form.target_method.value = item.target_method;
+  const sourceMethod = splitCustodyMethod(item.source_method);
+  const targetMethod = splitCustodyMethod(item.target_method);
+  form.source_method.value = sourceMethod.method;
+  form.source_custody_holder.value = sourceMethod.holder;
+  form.target_method.value = targetMethod.method;
+  form.target_custody_holder.value = targetMethod.holder;
+  toggleTransferCustody();
   form.amount.value = item.amount;
   form.note.value = item.note || "";
   qs("#transferFormTitle").textContent = `تعديل توسيط #${item.id}`;
@@ -763,8 +812,11 @@ function bindEvents() {
   qs("#collectionSearch").addEventListener("input", debounce(loadCollections, 250));
   qs("#collectionMonth").addEventListener("change", loadCollections);
   qs('#collectionForm select[name="collection_type"]').addEventListener("change", toggleCollectionOtherType);
+  qs('#collectionForm select[name="payment_method"]').addEventListener("change", toggleCollectionCustody);
   qs("#expenseSearch").addEventListener("input", debounce(loadExpenses, 250));
   qs("#expenseMonth").addEventListener("change", loadExpenses);
+  qs('#transferForm select[name="source_method"]').addEventListener("change", toggleTransferCustody);
+  qs('#transferForm select[name="target_method"]').addEventListener("change", toggleTransferCustody);
 
   document.addEventListener("click", (event) => {
     const collectionEdit = event.target.closest("[data-edit-collection]");
