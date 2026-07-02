@@ -1,15 +1,15 @@
 :root {
-  --bg: #f6f7f9;
+  --bg: #f4f8f3;
   --surface: #ffffff;
-  --ink: #17202a;
-  --muted: #667085;
-  --line: #d7dde5;
-  --primary: #176b87;
-  --primary-dark: #0f4e63;
-  --accent: #3d7a45;
+  --ink: #121512;
+  --muted: #5f6d5e;
+  --line: #dce7d8;
+  --primary: #2f9b34;
+  --primary-dark: #1f6f24;
+  --accent: #111111;
   --danger: #b42318;
   --warning: #b86b00;
-  --shadow: 0 8px 24px rgba(16, 24, 40, 0.08);
+  --shadow: 0 8px 24px rgba(31, 111, 36, 0.1);
 }
 
 * { box-sizing: border-box; }
@@ -30,9 +30,9 @@ body {
   place-items: center;
   padding: 20px;
   background:
-    linear-gradient(rgba(29, 41, 57, .82), rgba(29, 41, 57, .82)),
-    radial-gradient(circle at top right, #176b87, transparent 34%),
-    #1d2939;
+    linear-gradient(rgba(18, 21, 18, .78), rgba(18, 21, 18, .78)),
+    radial-gradient(circle at top right, rgba(47, 155, 52, .5), transparent 34%),
+    #111;
 }
 
 .login-card {
@@ -42,6 +42,13 @@ body {
   border-radius: 8px;
   padding: 22px;
   box-shadow: var(--shadow);
+}
+
+.login-logo {
+  display: block;
+  width: 136px;
+  max-width: 46%;
+  margin: 0 auto 14px;
 }
 
 .login-card h1 {
@@ -71,8 +78,26 @@ button, input, select, textarea {
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  background: #1d2939;
+  background: #111;
   color: #fff;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-width: 0;
+}
+
+.brand-logo {
+  width: 62px;
+  height: 62px;
+  object-fit: contain;
+  background: #fff;
+  border-radius: 8px;
+  padding: 5px;
+  box-shadow: 0 4px 14px rgba(0,0,0,.18);
+  flex: 0 0 auto;
 }
 
 .topbar h1 {
@@ -83,7 +108,7 @@ button, input, select, textarea {
 
 .topbar p {
   margin: 0;
-  color: #d0d5dd;
+  color: #dbeed8;
   font-size: 14px;
 }
 
@@ -113,7 +138,7 @@ button {
 }
 
 button:hover { background: var(--primary-dark); }
-button.secondary { background: #eef2f6; color: var(--ink); }
+button.secondary { background: #edf5eb; color: var(--ink); }
 button.danger { background: var(--danger); }
 
 main {
@@ -150,7 +175,7 @@ main {
 }
 
 .metric.accent {
-  border-color: rgba(61, 122, 69, .35);
+  border-color: rgba(47, 155, 52, .4);
 }
 
 .workbench {
@@ -165,7 +190,7 @@ main {
   display: flex;
   gap: 2px;
   padding: 8px;
-  background: #eef2f6;
+  background: #ecf5e9;
   border-bottom: 1px solid var(--line);
   overflow-x: auto;
   -webkit-overflow-scrolling: touch;
@@ -237,7 +262,7 @@ table {
 
 th, td {
   padding: 10px 12px;
-  border-bottom: 1px solid #eef2f6;
+  border-bottom: 1px solid #edf5eb;
   text-align: right;
   vertical-align: middle;
   white-space: nowrap;
@@ -396,7 +421,7 @@ label.check input {
   grid-template-columns: 120px minmax(0, 1fr);
   gap: 12px;
   padding: 10px 0;
-  border-bottom: 1px solid #eef2f6;
+  border-bottom: 1px solid #edf5eb;
 }
 
 .insights div:last-child { border-bottom: 0; }
@@ -470,6 +495,16 @@ label.check input {
     min-height: 0;
     padding: 12px;
     gap: 12px;
+  }
+
+  .brand {
+    gap: 10px;
+  }
+
+  .brand-logo {
+    width: 52px;
+    height: 52px;
+    padding: 4px;
   }
 
   .topbar h1 {
@@ -628,7 +663,7 @@ label.check input {
     grid-template-columns: minmax(96px, 38%) minmax(0, 1fr);
     gap: 8px;
     min-height: 38px;
-    border-bottom: 1px solid #eef2f6;
+    border-bottom: 1px solid #edf5eb;
     padding: 9px 10px;
     white-space: normal;
     overflow-wrap: anywhere;

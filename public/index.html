@@ -9,6 +9,7 @@
 <body>
   <section id="loginScreen" class="login-screen">
     <form id="loginForm" class="login-card" method="post" action="/api/login-page">
+      <img class="login-logo" src="/epc-logo.png" alt="EPC Egyptian paper cups">
       <h1>نظام التحصيلات والمصروفات</h1>
       <p>تسجيل الدخول</p>
       <label>اسم المستخدم<input name="username" autocomplete="username" required></label>
@@ -20,9 +21,12 @@
 
   <div id="appShell" class="app-shell hidden">
   <header class="topbar">
-    <div>
-      <h1>نظام التحصيلات والمصروفات</h1>
-      <p id="statusLine">جاري التحميل...</p>
+    <div class="brand">
+      <img class="brand-logo" src="/epc-logo.png" alt="EPC Egyptian paper cups">
+      <div>
+        <h1>نظام التحصيلات والمصروفات</h1>
+        <p id="statusLine">جاري التحميل...</p>
+      </div>
     </div>
     <div class="top-actions">
       <span id="currentUser" class="user-pill"></span>
