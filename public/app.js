@@ -527,10 +527,11 @@ function renderSupplyOrders() {
       <td data-label="الخامة">${item.material_name || "-"}</td>
       <td data-label="الكمية">${money(item.quantity_amount)} ${item.quantity_unit || ""}</td>
       <td data-label="السعر">${money(item.price_without_cover)} / ${money(item.price_with_cover)}</td>
+      <td data-label="سعر السريل">${money(item.serial_color_price)}</td>
       <td data-label="تاريخ التوريد">${item.supply_date || "-"}</td>
       <td data-label="المستخدم">${item.created_by_name || "-"}</td>
     </tr>
-  `).join("") || `<tr><td colspan="10" class="muted">لا توجد أوامر توريد مسجلة</td></tr>`;
+  `).join("") || `<tr><td colspan="11" class="muted">لا توجد أوامر توريد مسجلة</td></tr>`;
 }
 
 function renderUsers() {
@@ -796,6 +797,7 @@ function resetSupplyOrderForm() {
   form.reset();
   form.price_without_cover.value = "0";
   form.price_with_cover.value = "0";
+  form.serial_color_price.value = "0";
   form.quantity_unit.value = "كيلو";
   form.delivery_cost_party.value = "المصنع";
   fillSupplyOrderFormLookups();

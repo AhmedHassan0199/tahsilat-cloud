@@ -589,6 +589,7 @@ function supplyOrderData(payload) {
     quantity_amount: Number(payload.quantity_amount || 0),
     price_without_cover: Number(payload.price_without_cover || 0),
     price_with_cover: Number(payload.price_with_cover || 0),
+    serial_color_price: Number(payload.serial_color_price || 0),
     delivery_cost_party: ["المصنع", "العميل"].includes(payload.delivery_cost_party) ? payload.delivery_cost_party : "المصنع",
     supply_date: parseDateValue(payload.supply_date) || null,
     print_approval_status: String(payload.print_approval_status || "").trim() || null,
@@ -596,10 +597,6 @@ function supplyOrderData(payload) {
     delivery_duration: String(payload.delivery_duration || "").trim() || null,
     payment_method: String(payload.payment_method || "").trim() || null,
     delivery_place: String(payload.delivery_place || "").trim() || null,
-    policies: String(payload.policies || "").trim() || null,
-    customer_signature: String(payload.customer_signature || "").trim() || null,
-    planning_signature: String(payload.planning_signature || "").trim() || null,
-    chairman_signature: String(payload.chairman_signature || "").trim() || null,
     note: String(payload.note || "").trim() || null,
   };
 }
@@ -614,10 +611,11 @@ async function createSupplyOrder(request, env, user) {
   if (!Number.isFinite(data.quantity_amount) || data.quantity_amount <= 0) throw new HttpError("الكمية المطلوبة يجب أن تكون أكبر من صفر", 400);
   if (!Number.isFinite(data.price_without_cover) || data.price_without_cover < 0) throw new HttpError("السعر بدون غطاء غير صحيح", 400);
   if (!Number.isFinite(data.price_with_cover) || data.price_with_cover < 0) throw new HttpError("السعر بالغطاء غير صحيح", 400);
+  if (!Number.isFinite(data.serial_color_price) || data.serial_color_price < 0) throw new HttpError("سعر السريل للون واحد غير صحيح", 400);
   const now = nowIso();
   const result = await env.DB.prepare(
-    `INSERT INTO supply_orders(order_date, customer_id, customer_name, design_id, design_name, size_id, size_name, material_id, material_name, quantity_unit, quantity_amount, price_without_cover, price_with_cover, delivery_cost_party, supply_date, print_approval_status, cylinder_colors_count, delivery_duration, payment_method, delivery_place, policies, customer_signature, planning_signature, chairman_signature, note, created_by, created_at, updated_at)
-     VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    `INSERT INTO supply_orders(order_date, customer_id, customer_name, design_id, design_name, size_id, size_name, material_id, material_name, quantity_unit, quantity_amount, price_without_cover, price_with_cover, serial_color_price, delivery_cost_party, supply_date, print_approval_status, cylinder_colors_count, delivery_duration, payment_method, delivery_place, note, created_by, created_at, updated_at)
+     VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).bind(
     data.order_date,
     customer.id,
@@ -632,6 +630,7 @@ async function createSupplyOrder(request, env, user) {
     data.quantity_amount,
     data.price_without_cover,
     data.price_with_cover,
+    data.serial_color_price,
     data.delivery_cost_party,
     data.supply_date,
     data.print_approval_status,
@@ -639,10 +638,6 @@ async function createSupplyOrder(request, env, user) {
     data.delivery_duration,
     data.payment_method,
     data.delivery_place,
-    data.policies,
-    data.customer_signature,
-    data.planning_signature,
-    data.chairman_signature,
     data.note,
     user.id,
     now,

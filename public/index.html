@@ -190,6 +190,7 @@
             </fieldset>
             <label>السعر بدون غطاء<input name="price_without_cover" type="number" min="0" step="0.01" value="0"></label>
             <label>السعر بالغطاء<input name="price_with_cover" type="number" min="0" step="0.01" value="0"></label>
+            <label>سعر السريل للون واحد<input name="serial_color_price" type="number" min="0" step="0.01" value="0"></label>
             <fieldset class="radio-set">
               <legend>تكلفة النقل</legend>
               <label><input type="radio" name="delivery_cost_party" value="المصنع" checked> المصنع</label>
@@ -201,10 +202,6 @@
             <label>مدة التوريد<input name="delivery_duration"></label>
             <label>طريقة الدفع<input name="payment_method"></label>
             <label>مكان التسليم<input name="delivery_place"></label>
-            <label class="wide">السياسات<textarea name="policies" rows="2"></textarea></label>
-            <label>العميل<input name="customer_signature"></label>
-            <label>التخطيط<input name="planning_signature"></label>
-            <label>رئيس مجلس الإدارة<input name="chairman_signature"></label>
             <label class="wide">ملاحظة<textarea name="note" rows="2"></textarea></label>
             <div class="form-actions"><button type="submit">حفظ أمر التوريد</button></div>
           </form>
@@ -212,7 +209,7 @@
             <div class="panel-head"><h2>أوامر التوريد المسجلة</h2></div>
             <div class="table-wrap records">
               <table>
-                <thead><tr><th>رقم</th><th>التاريخ</th><th>العميل</th><th>التصميم</th><th>المقاس</th><th>الخامة</th><th>الكمية</th><th>السعر</th><th>تاريخ التوريد</th><th>المستخدم</th></tr></thead>
+                <thead><tr><th>رقم</th><th>التاريخ</th><th>العميل</th><th>التصميم</th><th>المقاس</th><th>الخامة</th><th>الكمية</th><th>السعر</th><th>سعر السريل</th><th>تاريخ التوريد</th><th>المستخدم</th></tr></thead>
                 <tbody id="supplyOrderRows"></tbody>
               </table>
             </div>
