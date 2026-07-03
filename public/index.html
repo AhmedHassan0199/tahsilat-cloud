@@ -62,6 +62,7 @@
         <button class="tab" data-tab="collections" type="button">التحصيلات</button>
         <button class="tab" data-tab="customers" type="button">العملاء</button>
         <button class="tab" data-tab="supplyOrders" type="button">أمر التوريد</button>
+        <button class="tab" data-tab="deliveryNotes" type="button">إذن التسليم</button>
         <button class="tab" data-tab="expenses" type="button">المصروفات</button>
         <button class="tab" data-tab="treasury" type="button">الخزينة</button>
         <button class="tab" data-tab="transfers" type="button">توسيط</button>
@@ -211,6 +212,53 @@
               <table>
                 <thead><tr><th>رقم</th><th>التاريخ</th><th>العميل</th><th>التصميم</th><th>المقاس</th><th>الخامة</th><th>الكمية</th><th>السعر</th><th>سعر السريل</th><th>تاريخ التوريد</th><th>المستخدم</th></tr></thead>
                 <tbody id="supplyOrderRows"></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="deliveryNotes" class="tab-panel">
+        <div class="entry-layout supply-layout">
+          <form id="deliveryNoteForm" class="form-panel" novalidate>
+            <h2>إذن التسليم</h2>
+            <label>التاريخ<input name="delivery_date" type="date"></label>
+            <label>العميل<select name="customer_id" required></select></label>
+            <div class="line-card">
+              <div class="line-card-head">
+                <strong id="deliveryItemCounter">الصنف 1 من 1</strong>
+              </div>
+              <label>الصنف<select name="product_type" required><option value="كوبايات - علب">كوبايات - علب</option><option value="غطيان">غطيان</option></select></label>
+              <label>التصميم<select name="design_id" required></select></label>
+              <label>المقاس<select name="size_id" required></select></label>
+              <fieldset class="radio-set">
+                <legend>العدد</legend>
+                <label><input type="radio" name="quantity_unit" value="كيلو" checked> كيلو</label>
+                <label><input type="radio" name="quantity_unit" value="كرتونه"> كرتونه</label>
+                <input name="quantity_amount" type="number" min="0" step="0.01" required>
+              </fieldset>
+              <label class="wide">ملاحظة للصنف<textarea name="item_note" rows="2"></textarea></label>
+              <div class="form-actions">
+                <button id="prevDeliveryItemBtn" class="secondary" type="button">السابق</button>
+                <button id="nextDeliveryItemBtn" type="button">التالي</button>
+              </div>
+            </div>
+            <label class="wide">ملاحظة عامة<textarea name="note" rows="2"></textarea></label>
+            <div class="form-actions"><button class="primary-wide" type="submit">إنهاء وحفظ إذن التسليم</button></div>
+          </form>
+          <div class="panel">
+            <div class="panel-head"><h2>الأصناف داخل الإذن</h2></div>
+            <div class="table-wrap records">
+              <table>
+                <thead><tr><th>#</th><th>الصنف</th><th>التصميم</th><th>المقاس</th><th>العدد</th><th>ملاحظة</th></tr></thead>
+                <tbody id="deliveryDraftRows"></tbody>
+              </table>
+            </div>
+            <div class="panel-head"><h2>أذونات التسليم المسجلة</h2></div>
+            <div class="table-wrap records">
+              <table>
+                <thead><tr><th>رقم</th><th>التاريخ</th><th>العميل</th><th>عدد الأصناف</th><th>إجمالي العدد</th><th>المستخدم</th></tr></thead>
+                <tbody id="deliveryNoteRows"></tbody>
               </table>
             </div>
           </div>

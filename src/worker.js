@@ -58,6 +58,8 @@ async function handleApi(request, env, url) {
   if (url.pathname === "/api/customers" && method === "POST") return createCustomer(request, env, user);
   if (url.pathname === "/api/supply-orders" && method === "GET") return listSupplyOrders(env);
   if (url.pathname === "/api/supply-orders" && method === "POST") return createSupplyOrder(request, env, user);
+  if (url.pathname === "/api/delivery-notes" && method === "GET") return listDeliveryNotes(env);
+  if (url.pathname === "/api/delivery-notes" && method === "POST") return createDeliveryNote(request, env, user);
   if (url.pathname === "/api/payment-methods" && method === "GET") return paymentMethods(env);
   if (url.pathname === "/api/payment-methods" && method === "POST") return createPaymentMethod(request, env, user);
   if (url.pathname === "/api/expense-accounts" && method === "GET") return expenseAccounts(env);
@@ -95,6 +97,7 @@ async function health(env) {
   checks.customers = await env.DB.prepare("SELECT COUNT(*) AS count FROM customers").first().catch(() => ({ count: "migration_needed" }));
   checks.custody_holders = await env.DB.prepare("SELECT COUNT(*) AS count FROM custody_holders").first().catch(() => ({ count: "migration_needed" }));
   checks.supply_orders = await env.DB.prepare("SELECT COUNT(*) AS count FROM supply_orders").first().catch(() => ({ count: "migration_needed" }));
+  checks.delivery_notes = await env.DB.prepare("SELECT COUNT(*) AS count FROM delivery_notes").first().catch(() => ({ count: "migration_needed" }));
   checks.transfers = await env.DB.prepare("SELECT COUNT(*) AS count FROM transfers").first().catch(() => ({ count: "migration_needed" }));
   checks.expense_accounts = await env.DB.prepare("SELECT COUNT(*) AS count FROM expense_accounts").first().catch(() => ({ count: "migration_needed" }));
   checks.payment_methods = await env.DB.prepare("SELECT COUNT(*) AS count FROM payment_methods").first();
@@ -695,6 +698,99 @@ async function resolveLookup(env, request, user, tableName, id, newName, errorMe
   ).bind(name, normalized, now, now).run();
   await insertAudit(env, request, user, "INSERT", tableName, result.meta.last_row_id, null, { name, normalized_name: normalized, source: "supply_order" });
   return { id: result.meta.last_row_id, name };
+}
+
+async function listDeliveryNotes(env) {
+  const result = await env.DB.prepare(
+    `SELECT delivery_notes.*, users.display_name AS created_by_name,
+            COUNT(delivery_note_items.id) AS item_count,
+            COALESCE(SUM(delivery_note_items.quantity_amount), 0) AS total_quantity
+     FROM delivery_notes
+     LEFT JOIN delivery_note_items ON delivery_note_items.delivery_note_id = delivery_notes.id
+     LEFT JOIN users ON users.id = delivery_notes.created_by
+     GROUP BY delivery_notes.id
+     ORDER BY COALESCE(delivery_date, '') DESC, delivery_notes.id DESC
+     LIMIT 300`
+  ).all();
+  return json({ items: result.results });
+}
+
+function deliveryNoteData(payload) {
+  return {
+    delivery_date: parseDateValue(payload.delivery_date) || new Date().toISOString().slice(0, 10),
+    customer_id: Number(payload.customer_id || 0) || null,
+    note: String(payload.note || "").trim() || null,
+    items: Array.isArray(payload.items) ? payload.items : [],
+  };
+}
+
+function deliveryItemData(payload, index) {
+  return {
+    line_no: index + 1,
+    product_type: ["كوبايات - علب", "غطيان"].includes(payload.product_type) ? payload.product_type : "",
+    design_id: Number(payload.design_id || 0) || null,
+    size_id: Number(payload.size_id || 0) || null,
+    quantity_unit: ["كيلو", "كرتونه"].includes(payload.quantity_unit) ? payload.quantity_unit : "كيلو",
+    quantity_amount: Number(payload.quantity_amount || 0),
+    note: String(payload.note || "").trim() || null,
+  };
+}
+
+async function createDeliveryNote(request, env, user) {
+  assertCanWrite(user);
+  const data = deliveryNoteData(await readJson(request));
+  if (!data.customer_id) throw new HttpError("العميل مطلوب", 400);
+  if (!data.items.length) throw new HttpError("يجب إضافة صنف واحد على الأقل في إذن التسليم", 400);
+  const customer = await env.DB.prepare("SELECT id, name FROM customers WHERE id = ? AND active = 1").bind(data.customer_id).first();
+  if (!customer) throw new HttpError("العميل غير صحيح", 400);
+
+  const items = [];
+  for (let index = 0; index < data.items.length; index += 1) {
+    const item = deliveryItemData(data.items[index], index);
+    if (!item.product_type) throw new HttpError(`نوع الصنف مطلوب في السطر ${item.line_no}`, 400);
+    if (!item.design_id) throw new HttpError(`التصميم مطلوب في السطر ${item.line_no}`, 400);
+    if (!item.size_id) throw new HttpError(`المقاس مطلوب في السطر ${item.line_no}`, 400);
+    if (!Number.isFinite(item.quantity_amount) || item.quantity_amount <= 0) throw new HttpError(`العدد يجب أن يكون أكبر من صفر في السطر ${item.line_no}`, 400);
+    const design = await env.DB.prepare("SELECT id, name FROM designs WHERE id = ? AND active = 1").bind(item.design_id).first();
+    if (!design) throw new HttpError(`التصميم غير صحيح في السطر ${item.line_no}`, 400);
+    const size = await env.DB.prepare("SELECT id, name FROM product_sizes WHERE id = ? AND active = 1").bind(item.size_id).first();
+    if (!size) throw new HttpError(`المقاس غير صحيح في السطر ${item.line_no}`, 400);
+    items.push({ ...item, design_name: design.name, size_name: size.name });
+  }
+
+  const now = nowIso();
+  const result = await env.DB.prepare(
+    `INSERT INTO delivery_notes(delivery_date, customer_id, customer_name, note, created_by, created_at, updated_at)
+     VALUES(?, ?, ?, ?, ?, ?, ?)`
+  ).bind(data.delivery_date, customer.id, customer.name, data.note, user.id, now, now).run();
+  const deliveryNoteId = result.meta.last_row_id;
+
+  for (const item of items) {
+    await env.DB.prepare(
+      `INSERT INTO delivery_note_items(delivery_note_id, line_no, product_type, design_id, design_name, size_id, size_name, quantity_unit, quantity_amount, note)
+       VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).bind(
+      deliveryNoteId,
+      item.line_no,
+      item.product_type,
+      item.design_id,
+      item.design_name,
+      item.size_id,
+      item.size_name,
+      item.quantity_unit,
+      item.quantity_amount,
+      item.note
+    ).run();
+  }
+
+  await insertAudit(env, request, user, "INSERT", "delivery_notes", deliveryNoteId, null, {
+    delivery_date: data.delivery_date,
+    customer_id: customer.id,
+    customer_name: customer.name,
+    note: data.note,
+    items,
+  });
+  return json({ id: deliveryNoteId, item_count: items.length });
 }
 
 async function createCollection(request, env, user) {
@@ -1319,7 +1415,7 @@ async function auditLog(env, user) {
 async function backup(env, user) {
   if (user.role !== "admin") throw new HttpError("Admins only", 403);
   const tables = {};
-  for (const table of ["users", "payment_methods", "expense_accounts", "customers", "custody_holders", "designs", "product_sizes", "materials", "collections", "expenses", "transfers", "supply_orders", "audit_logs"]) {
+  for (const table of ["users", "payment_methods", "expense_accounts", "customers", "custody_holders", "designs", "product_sizes", "materials", "collections", "expenses", "transfers", "supply_orders", "delivery_notes", "delivery_note_items", "audit_logs"]) {
     const result = await env.DB.prepare(`SELECT * FROM ${table} ORDER BY id`).all();
     tables[table] = result.results.map((row) => {
       if (table !== "users") return row;

@@ -561,6 +561,29 @@ label.check input {
   margin-top: 4px;
 }
 
+.line-card {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 12px;
+  margin: 12px 0;
+  background: #f8fafc;
+}
+
+.line-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.selected-row {
+  background: #f0f7ff;
+}
+
+.primary-wide {
+  width: 100%;
+}
+
 .form-actions {
   display: flex;
   gap: 8px;
