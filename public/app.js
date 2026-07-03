@@ -16,6 +16,7 @@ const state = {
   deliveryNotes: [],
   invoices: [],
   invoiceDraft: null,
+  customerStatement: null,
   deliveryDraft: { index: 0, items: [] },
   audit: [],
   users: [],
@@ -858,6 +859,42 @@ function renderCollectionReport() {
   `).join("") || `<tr><td colspan="5" class="muted">لا توجد تحصيلات في هذه الفترة</td></tr>`;
 }
 
+function renderCustomerStatement() {
+  const data = state.customerStatement;
+  qs("#statementInvoiceTotal").textContent = money(data?.totals?.invoices || 0);
+  qs("#statementCollectionTotal").textContent = money(data?.totals?.collections || 0);
+  qs("#statementRemaining").textContent = money(data?.totals?.remaining || 0);
+
+  const invoiceBody = qs("#statementInvoiceRows");
+  if (invoiceBody) {
+    const rows = data?.invoices || [];
+    invoiceBody.innerHTML = rows.map((item) => `
+      <tr>
+        <td data-label="رقم الفاتورة">#${item.id}</td>
+        <td data-label="التاريخ">${item.invoice_date || "-"}</td>
+        <td data-label="إذن التسليم">#${item.delivery_note_id}</td>
+        <td data-label="الإجمالي">${money(item.total)}</td>
+        <td data-label="ملاحظة">${item.note || "-"}</td>
+      </tr>
+    `).join("") || `<tr><td colspan="5" class="muted">لا توجد فواتير لهذا العميل</td></tr>`;
+  }
+
+  const collectionBody = qs("#statementCollectionRows");
+  if (collectionBody) {
+    const rows = data?.collections || [];
+    collectionBody.innerHTML = rows.map((item) => `
+      <tr>
+        <td data-label="رقم">#${item.id}</td>
+        <td data-label="التاريخ">${item.entry_date || "-"}</td>
+        <td data-label="المسؤول">${item.responsible || "-"}</td>
+        <td data-label="النوع">${item.collection_type || "-"}</td>
+        <td data-label="المبلغ">${money(item.amount)}</td>
+        <td data-label="الطريقة">${item.payment_method || "-"}</td>
+      </tr>
+    `).join("") || `<tr><td colspan="6" class="muted">لا توجد تحصيلات لهذا العميل</td></tr>`;
+  }
+}
+
 function renderResponsibleMonthly() {
   const body = qs("#responsibleMonthlyRows");
   if (!body) return;
@@ -913,6 +950,7 @@ async function loadBootstrap() {
   qsa('select[name="responsible"]').forEach((select) => fillSelect(select, state.responsibles));
   qsa('select[name="customer_id"]').forEach((select) => fillCustomerSelect(select, select.value));
   fillCustomerSelect(qs("#collectionReportCustomer"), qs("#collectionReportCustomer")?.value);
+  fillCustomerSelect(qs("#statementCustomer"), qs("#statementCustomer")?.value);
   qsa('select[name="collection_type"]').forEach((select) => fillSelect(select, state.collectionTypes, select.value));
   fillSelect(qs("#collectionReportType"), ["", ...state.collectionTypes], qs("#collectionReportType")?.value);
   qs("#collectionReportType").options[0].textContent = "كل الأنواع";
@@ -948,6 +986,7 @@ async function loadCustomers() {
   state.customers = data.items;
   renderCustomers();
   qsa('select[name="customer_id"]').forEach((select) => fillCustomerSelect(select, select.value));
+  fillCustomerSelect(qs("#statementCustomer"), qs("#statementCustomer")?.value);
   fillSupplyOrderFormLookups();
   fillDeliveryNoteFormLookups();
 }
@@ -1018,6 +1057,13 @@ async function loadCollectionReport() {
   const params = collectionReportParams();
   state.collectionReport = await api(`/api/reports/collections?${params.toString()}`);
   renderCollectionReport();
+}
+
+async function loadCustomerStatement() {
+  const customerId = qs("#statementCustomer")?.value;
+  if (!customerId) throw new Error("اختر العميل أولا");
+  state.customerStatement = await api(`/api/customer-statement?customer_id=${encodeURIComponent(customerId)}`);
+  renderCustomerStatement();
 }
 
 function collectionReportParams() {
@@ -1529,6 +1575,10 @@ function bindEvents() {
     loadCollectionReport().catch((error) => showToast(error.message, true));
   });
 
+  qs("#loadStatementBtn").addEventListener("click", () => {
+    loadCustomerStatement().catch((error) => showToast(error.message, true));
+  });
+
   qs("#expenseReportType").addEventListener("change", () => {
     fillExpenseReportCodes();
   });
@@ -1696,6 +1746,7 @@ async function init() {
     resetSupplyOrderForm();
     resetDeliveryNoteForm();
     resetInvoiceForm();
+    renderCustomerStatement();
     showApp();
     showToast("النظام جاهز");
   } catch (error) {

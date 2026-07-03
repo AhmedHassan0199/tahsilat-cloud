@@ -56,6 +56,7 @@ async function handleApi(request, env, url) {
   }
   if (url.pathname === "/api/customers" && method === "GET") return listCustomers(env);
   if (url.pathname === "/api/customers" && method === "POST") return createCustomer(request, env, user);
+  if (url.pathname === "/api/customer-statement" && method === "GET") return customerStatement(env, url);
   if (url.pathname === "/api/supply-orders" && method === "GET") return listSupplyOrders(env);
   if (url.pathname === "/api/supply-orders" && method === "POST") return createSupplyOrder(request, env, user);
   if (url.pathname.startsWith("/api/supply-orders/")) {
@@ -582,6 +583,37 @@ async function createCustomer(request, env, user) {
   const customer = await env.DB.prepare("SELECT id, name FROM customers WHERE normalized_name = ?").bind(normalized).first();
   await insertAudit(env, request, user, "INSERT", "customers", customer?.id || result.meta.last_row_id || null, null, { name, normalized_name: normalized });
   return json({ id: customer?.id || result.meta.last_row_id, name });
+}
+
+async function customerStatement(env, url) {
+  const customerId = Number(url.searchParams.get("customer_id") || 0) || null;
+  if (!customerId) throw new HttpError("العميل مطلوب", 400);
+  const customer = await env.DB.prepare("SELECT id, name FROM customers WHERE id = ? AND active = 1").bind(customerId).first();
+  if (!customer) throw new HttpError("العميل غير صحيح", 400);
+  const invoices = await env.DB.prepare(
+    `SELECT id, invoice_date, delivery_note_id, subtotal, delivery_charge, total, note, created_at
+     FROM invoices
+     WHERE customer_id = ?
+     ORDER BY COALESCE(invoice_date, '') DESC, id DESC`
+  ).bind(customerId).all();
+  const collections = await env.DB.prepare(
+    `SELECT id, entry_date, responsible, collection_type, amount, payment_method, note, created_at
+     FROM collections
+     WHERE customer_id = ?
+     ORDER BY COALESCE(entry_date, '') DESC, id DESC`
+  ).bind(customerId).all();
+  const totalInvoices = invoices.results.reduce((sum, item) => sum + Number(item.total || 0), 0);
+  const totalCollections = collections.results.reduce((sum, item) => sum + Number(item.amount || 0), 0);
+  return json({
+    customer,
+    invoices: invoices.results,
+    collections: collections.results,
+    totals: {
+      invoices: totalInvoices,
+      collections: totalCollections,
+      remaining: totalInvoices - totalCollections,
+    },
+  });
 }
 
 async function listSupplyOrders(env) {

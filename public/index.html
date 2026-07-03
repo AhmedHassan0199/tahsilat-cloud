@@ -64,6 +64,7 @@
         <button class="tab" data-tab="supplyOrders" type="button">أمر التوريد</button>
         <button class="tab" data-tab="deliveryNotes" type="button">إذن التسليم</button>
         <button class="tab" data-tab="invoices" type="button">الفواتير</button>
+        <button class="tab" data-tab="customerStatement" type="button">كشف حساب</button>
         <button class="tab" data-tab="expenses" type="button">المصروفات</button>
         <button class="tab" data-tab="treasury" type="button">الخزينة</button>
         <button class="tab" data-tab="transfers" type="button">توسيط</button>
@@ -293,6 +294,43 @@
                 <thead><tr><th>رقم</th><th>التاريخ</th><th>إذن التسليم</th><th>العميل</th><th>الأصناف</th><th>الإجمالي</th><th>المستخدم</th><th></th></tr></thead>
                 <tbody id="invoiceRows"></tbody>
               </table>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="customerStatement" class="tab-panel">
+        <div class="panel">
+          <div class="panel-head">
+            <h2>كشف حساب عميل</h2>
+            <div class="filters">
+              <select id="statementCustomer"></select>
+              <button id="loadStatementBtn" type="button">عرض</button>
+            </div>
+          </div>
+          <section class="metrics statement-metrics">
+            <div class="metric"><span>إجمالي الفواتير</span><strong id="statementInvoiceTotal">0</strong></div>
+            <div class="metric"><span>إجمالي التحصيلات</span><strong id="statementCollectionTotal">0</strong></div>
+            <div class="metric accent"><span>المتبقي للتحصيل</span><strong id="statementRemaining">0</strong></div>
+          </section>
+          <div class="grid two">
+            <div>
+              <div class="panel-head"><h2>الفواتير المستحقة</h2></div>
+              <div class="table-wrap records">
+                <table>
+                  <thead><tr><th>رقم الفاتورة</th><th>التاريخ</th><th>إذن التسليم</th><th>الإجمالي</th><th>ملاحظة</th></tr></thead>
+                  <tbody id="statementInvoiceRows"></tbody>
+                </table>
+              </div>
+            </div>
+            <div>
+              <div class="panel-head"><h2>التحصيلات</h2></div>
+              <div class="table-wrap records">
+                <table>
+                  <thead><tr><th>رقم</th><th>التاريخ</th><th>المسؤول</th><th>النوع</th><th>المبلغ</th><th>الطريقة</th></tr></thead>
+                  <tbody id="statementCollectionRows"></tbody>
+                </table>
+              </div>
             </div>
           </div>
         </div>

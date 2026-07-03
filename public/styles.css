@@ -584,6 +584,10 @@ label.check input {
   width: 100%;
 }
 
+.statement-metrics {
+  margin: 12px 0;
+}
+
 .invoice-items {
   display: grid;
   gap: 10px;
