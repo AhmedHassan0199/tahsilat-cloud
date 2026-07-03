@@ -301,6 +301,15 @@ function fillDeliveryNoteFormLookups() {
   fillExistingLookupSelect(form.size_id, state.productSizes, "اختر المقاس", form.size_id.value);
 }
 
+function toggleDeliveryProductType() {
+  const form = qs("#deliveryNoteForm");
+  if (!form) return;
+  const isCovers = form.product_type.value === "غطيان";
+  qs("#deliveryDesignWrap").classList.toggle("hidden", isCovers);
+  form.design_id.required = !isCovers;
+  if (isCovers) form.design_id.value = "";
+}
+
 function deliveryCurrentItem() {
   return state.deliveryDraft.items[state.deliveryDraft.index] || blankDeliveryItem();
 }
@@ -308,9 +317,10 @@ function deliveryCurrentItem() {
 function saveVisibleDeliveryItem() {
   const form = qs("#deliveryNoteForm");
   if (!form) return;
+  const isCovers = form.product_type.value === "غطيان";
   state.deliveryDraft.items[state.deliveryDraft.index] = {
     product_type: form.product_type.value,
-    design_id: form.design_id.value,
+    design_id: isCovers ? "" : form.design_id.value,
     size_id: form.size_id.value,
     quantity_unit: form.quantity_unit.value,
     quantity_amount: form.quantity_amount.value,
@@ -329,6 +339,7 @@ function showDeliveryItem(index) {
   form.quantity_unit.value = item.quantity_unit || "كيلو";
   form.quantity_amount.value = item.quantity_amount || "";
   form.item_note.value = item.note || "";
+  toggleDeliveryProductType();
   qs("#deliveryItemCounter").textContent = `الصنف ${state.deliveryDraft.index + 1} من ${state.deliveryDraft.items.length}`;
   qs("#prevDeliveryItemBtn").disabled = state.deliveryDraft.index === 0;
   renderDeliveryDraftRows();
@@ -618,8 +629,12 @@ function renderSupplyOrders() {
       <td data-label="سعر السريل">${money(item.serial_color_price)}</td>
       <td data-label="تاريخ التوريد">${item.supply_date || "-"}</td>
       <td data-label="المستخدم">${item.created_by_name || "-"}</td>
+      <td class="actions">
+        <button type="button" data-edit-supply-order="${item.id}" title="تعديل">✎</button>
+        <button class="danger" type="button" data-delete-supply-order="${item.id}" title="حذف">×</button>
+      </td>
     </tr>
-  `).join("") || `<tr><td colspan="11" class="muted">لا توجد أوامر توريد مسجلة</td></tr>`;
+  `).join("") || `<tr><td colspan="12" class="muted">لا توجد أوامر توريد مسجلة</td></tr>`;
 }
 
 function renderDeliveryNotes() {
@@ -633,8 +648,12 @@ function renderDeliveryNotes() {
       <td data-label="عدد الأصناف">${money(item.item_count)}</td>
       <td data-label="إجمالي العدد">${money(item.total_quantity)}</td>
       <td data-label="المستخدم">${item.created_by_name || "-"}</td>
+      <td class="actions">
+        <button type="button" data-edit-delivery-note="${item.id}" title="تعديل">✎</button>
+        <button class="danger" type="button" data-delete-delivery-note="${item.id}" title="حذف">×</button>
+      </td>
     </tr>
-  `).join("") || `<tr><td colspan="6" class="muted">لا توجد أذونات تسليم مسجلة</td></tr>`;
+  `).join("") || `<tr><td colspan="7" class="muted">لا توجد أذونات تسليم مسجلة</td></tr>`;
 }
 
 function renderUsers() {
@@ -906,11 +925,13 @@ function resetSupplyOrderForm() {
   const form = qs("#supplyOrderForm");
   if (!form) return;
   form.reset();
+  form.elements.id.value = "";
   form.price_without_cover.value = "0";
   form.price_with_cover.value = "0";
   form.serial_color_price.value = "0";
   form.quantity_unit.value = "كيلو";
   form.delivery_cost_party.value = "المصنع";
+  qs("#supplyOrderFormTitle").textContent = "أمر التوريد";
   fillSupplyOrderFormLookups();
 }
 
@@ -918,6 +939,8 @@ function resetDeliveryNoteForm() {
   const form = qs("#deliveryNoteForm");
   if (!form) return;
   form.reset();
+  form.elements.id.value = "";
+  qs("#deliveryNoteFormTitle").textContent = "إذن التسليم";
   state.deliveryDraft = { index: 0, items: [blankDeliveryItem()] };
   fillDeliveryNoteFormLookups();
   showDeliveryItem(0);
@@ -987,12 +1010,19 @@ async function saveSupplyOrder(event) {
   event.preventDefault();
   const form = event.currentTarget;
   const data = formData(form);
+  const id = data.id;
+  delete data.id;
   ["customer_id", "design_id", "size_id", "material_id"].forEach((key) => {
     if (data[key] === "__new") data[key] = "";
   });
-  await api("/api/supply-orders", { method: "POST", body: JSON.stringify(data) });
+  if (id) {
+    await api(`/api/supply-orders/${id}`, { method: "PUT", body: JSON.stringify(data) });
+    showToast("تم تعديل أمر التوريد");
+  } else {
+    await api("/api/supply-orders", { method: "POST", body: JSON.stringify(data) });
+    showToast("تم حفظ أمر التوريد");
+  }
   resetSupplyOrderForm();
-  showToast("تم حفظ أمر التوريد");
   await Promise.all([loadBootstrap(), loadSupplyOrders(), loadCustomers(), loadAudit()]);
 }
 
@@ -1009,9 +1039,15 @@ async function saveDeliveryNote(event) {
     note: form.note.value.trim(),
     items,
   };
-  await api("/api/delivery-notes", { method: "POST", body: JSON.stringify(payload) });
+  const id = form.elements.id.value;
+  if (id) {
+    await api(`/api/delivery-notes/${id}`, { method: "PUT", body: JSON.stringify(payload) });
+    showToast("تم تعديل إذن التسليم");
+  } else {
+    await api("/api/delivery-notes", { method: "POST", body: JSON.stringify(payload) });
+    showToast("تم حفظ إذن التسليم");
+  }
   resetDeliveryNoteForm();
-  showToast("تم حفظ إذن التسليم");
   await Promise.all([loadDeliveryNotes(), loadAudit()]);
 }
 
@@ -1112,15 +1148,68 @@ function editTransfer(id) {
   form.scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
+function editSupplyOrder(id) {
+  const item = state.supplyOrders.find((row) => String(row.id) === String(id));
+  if (!item) return;
+  const form = qs("#supplyOrderForm");
+  form.elements.id.value = item.id;
+  form.order_date.value = item.order_date || "";
+  fillSupplyCustomerSelect(form.customer_id, item.customer_id || "");
+  fillLookupSelect(form.design_id, state.designs, "اختر التصميم", "تصميم جديد", item.design_id || "");
+  fillLookupSelect(form.size_id, state.productSizes, "اختر المقاس", "مقاس جديد", item.size_id || "");
+  fillLookupSelect(form.material_id, state.materials, "اختر الخامة", "خامة جديدة", item.material_id || "");
+  toggleSupplyNewFields();
+  form.quantity_unit.value = item.quantity_unit || "كيلو";
+  form.quantity_amount.value = item.quantity_amount || "";
+  form.price_without_cover.value = item.price_without_cover || 0;
+  form.price_with_cover.value = item.price_with_cover || 0;
+  form.serial_color_price.value = item.serial_color_price || 0;
+  form.delivery_cost_party.value = item.delivery_cost_party || "المصنع";
+  form.supply_date.value = item.supply_date || "";
+  form.print_approval_status.value = item.print_approval_status || "";
+  form.cylinder_colors_count.value = item.cylinder_colors_count || "";
+  form.delivery_duration.value = item.delivery_duration || "";
+  form.payment_method.value = item.payment_method || "";
+  form.delivery_place.value = item.delivery_place || "";
+  form.note.value = item.note || "";
+  qs("#supplyOrderFormTitle").textContent = `تعديل أمر توريد #${item.id}`;
+  form.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+function editDeliveryNote(id) {
+  const item = state.deliveryNotes.find((row) => String(row.id) === String(id));
+  if (!item) return;
+  const form = qs("#deliveryNoteForm");
+  form.elements.id.value = item.id;
+  form.delivery_date.value = item.delivery_date || "";
+  fillCustomerSelect(form.customer_id, item.customer_id || "");
+  form.note.value = item.note || "";
+  state.deliveryDraft = {
+    index: 0,
+    items: (item.items || []).map((row) => ({
+      product_type: row.product_type || "كوبايات - علب",
+      design_id: row.design_id || "",
+      size_id: row.size_id || "",
+      quantity_unit: row.quantity_unit || "كيلو",
+      quantity_amount: row.quantity_amount || "",
+      note: row.note || "",
+    })),
+  };
+  if (!state.deliveryDraft.items.length) state.deliveryDraft.items = [blankDeliveryItem()];
+  qs("#deliveryNoteFormTitle").textContent = `تعديل إذن تسليم #${item.id}`;
+  showDeliveryItem(0);
+  form.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
 async function removeRecord(kind, id) {
-  const labels = { collections: "التحصيل", expenses: "المصروف", transfers: "التوسيط" };
+  const labels = { collections: "التحصيل", expenses: "المصروف", transfers: "التوسيط", "supply-orders": "أمر التوريد", "delivery-notes": "إذن التسليم" };
   const label = labels[kind] || "السجل";
   if (!confirm(`حذف ${label} رقم ${id}؟`)) return;
   await api(`/api/${kind}/${id}`, { method: "DELETE" });
   showToast("تم الحذف");
   await Promise.all([
     loadDashboard(),
-    kind === "collections" ? loadCollections() : kind === "expenses" ? loadExpenses() : loadTransfers(),
+    kind === "collections" ? loadCollections() : kind === "expenses" ? loadExpenses() : kind === "transfers" ? loadTransfers() : kind === "supply-orders" ? loadSupplyOrders() : loadDeliveryNotes(),
     kind === "collections" ? loadCustomers() : Promise.resolve(),
     loadAudit(),
   ]);
@@ -1198,6 +1287,8 @@ function bindEvents() {
   qs("#cancelCollectionEdit").addEventListener("click", resetCollectionForm);
   qs("#cancelExpenseEdit").addEventListener("click", resetExpenseForm);
   qs("#cancelTransferEdit").addEventListener("click", resetTransferForm);
+  qs("#cancelSupplyOrderEdit").addEventListener("click", resetSupplyOrderForm);
+  qs("#cancelDeliveryNoteEdit").addEventListener("click", resetDeliveryNoteForm);
   qs("#nextDeliveryItemBtn").addEventListener("click", () => {
     const form = qs("#deliveryNoteForm");
     if (!form.reportValidity()) return;
@@ -1238,6 +1329,7 @@ function bindEvents() {
   });
   qsa('#deliveryNoteForm input, #deliveryNoteForm select, #deliveryNoteForm textarea').forEach((field) => {
     field.addEventListener("change", () => {
+      toggleDeliveryProductType();
       saveVisibleDeliveryItem();
       renderDeliveryDraftRows();
     });
@@ -1250,12 +1342,20 @@ function bindEvents() {
     const expenseDelete = event.target.closest("[data-delete-expense]");
     const transferEdit = event.target.closest("[data-edit-transfer]");
     const transferDelete = event.target.closest("[data-delete-transfer]");
+    const supplyOrderEdit = event.target.closest("[data-edit-supply-order]");
+    const supplyOrderDelete = event.target.closest("[data-delete-supply-order]");
+    const deliveryNoteEdit = event.target.closest("[data-edit-delivery-note]");
+    const deliveryNoteDelete = event.target.closest("[data-delete-delivery-note]");
     if (collectionEdit) editCollection(collectionEdit.dataset.editCollection);
     if (collectionDelete) removeRecord("collections", collectionDelete.dataset.deleteCollection).catch((error) => showToast(error.message, true));
     if (expenseEdit) editExpense(expenseEdit.dataset.editExpense);
     if (expenseDelete) removeRecord("expenses", expenseDelete.dataset.deleteExpense).catch((error) => showToast(error.message, true));
     if (transferEdit) editTransfer(transferEdit.dataset.editTransfer);
     if (transferDelete) removeRecord("transfers", transferDelete.dataset.deleteTransfer).catch((error) => showToast(error.message, true));
+    if (supplyOrderEdit) editSupplyOrder(supplyOrderEdit.dataset.editSupplyOrder);
+    if (supplyOrderDelete) removeRecord("supply-orders", supplyOrderDelete.dataset.deleteSupplyOrder).catch((error) => showToast(error.message, true));
+    if (deliveryNoteEdit) editDeliveryNote(deliveryNoteEdit.dataset.editDeliveryNote);
+    if (deliveryNoteDelete) removeRecord("delivery-notes", deliveryNoteDelete.dataset.deleteDeliveryNote).catch((error) => showToast(error.message, true));
   });
 }
 

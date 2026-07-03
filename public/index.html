@@ -173,7 +173,8 @@
       <section id="supplyOrders" class="tab-panel">
         <div class="entry-layout supply-layout">
           <form id="supplyOrderForm" class="form-panel">
-            <h2>أمر التوريد</h2>
+            <h2 id="supplyOrderFormTitle">أمر التوريد</h2>
+            <input type="hidden" name="id">
             <label>التاريخ<input name="order_date" type="date"></label>
             <label>اسم العميل<select name="customer_id" required></select></label>
             <label id="newSupplyCustomerWrap" class="hidden">اسم عميل جديد<input name="new_customer_name" autocomplete="off"></label>
@@ -204,13 +205,16 @@
             <label>طريقة الدفع<input name="payment_method"></label>
             <label>مكان التسليم<input name="delivery_place"></label>
             <label class="wide">ملاحظة<textarea name="note" rows="2"></textarea></label>
-            <div class="form-actions"><button type="submit">حفظ أمر التوريد</button></div>
+            <div class="form-actions">
+              <button type="submit">حفظ أمر التوريد</button>
+              <button type="button" class="secondary" id="cancelSupplyOrderEdit">إلغاء</button>
+            </div>
           </form>
           <div class="panel">
             <div class="panel-head"><h2>أوامر التوريد المسجلة</h2></div>
             <div class="table-wrap records">
               <table>
-                <thead><tr><th>رقم</th><th>التاريخ</th><th>العميل</th><th>التصميم</th><th>المقاس</th><th>الخامة</th><th>الكمية</th><th>السعر</th><th>سعر السريل</th><th>تاريخ التوريد</th><th>المستخدم</th></tr></thead>
+                <thead><tr><th>رقم</th><th>التاريخ</th><th>العميل</th><th>التصميم</th><th>المقاس</th><th>الخامة</th><th>الكمية</th><th>السعر</th><th>سعر السريل</th><th>تاريخ التوريد</th><th>المستخدم</th><th></th></tr></thead>
                 <tbody id="supplyOrderRows"></tbody>
               </table>
             </div>
@@ -221,7 +225,8 @@
       <section id="deliveryNotes" class="tab-panel">
         <div class="entry-layout supply-layout">
           <form id="deliveryNoteForm" class="form-panel" novalidate>
-            <h2>إذن التسليم</h2>
+            <h2 id="deliveryNoteFormTitle">إذن التسليم</h2>
+            <input type="hidden" name="id">
             <label>التاريخ<input name="delivery_date" type="date"></label>
             <label>العميل<select name="customer_id" required></select></label>
             <div class="line-card">
@@ -229,7 +234,7 @@
                 <strong id="deliveryItemCounter">الصنف 1 من 1</strong>
               </div>
               <label>الصنف<select name="product_type" required><option value="كوبايات - علب">كوبايات - علب</option><option value="غطيان">غطيان</option></select></label>
-              <label>التصميم<select name="design_id" required></select></label>
+              <label id="deliveryDesignWrap">التصميم<select name="design_id"></select></label>
               <label>المقاس<select name="size_id" required></select></label>
               <fieldset class="radio-set">
                 <legend>العدد</legend>
@@ -244,7 +249,10 @@
               </div>
             </div>
             <label class="wide">ملاحظة عامة<textarea name="note" rows="2"></textarea></label>
-            <div class="form-actions"><button class="primary-wide" type="submit">إنهاء وحفظ إذن التسليم</button></div>
+            <div class="form-actions">
+              <button class="primary-wide" type="submit">إنهاء وحفظ إذن التسليم</button>
+              <button type="button" class="secondary" id="cancelDeliveryNoteEdit">إلغاء</button>
+            </div>
           </form>
           <div class="panel">
             <div class="panel-head"><h2>الأصناف داخل الإذن</h2></div>
@@ -257,7 +265,7 @@
             <div class="panel-head"><h2>أذونات التسليم المسجلة</h2></div>
             <div class="table-wrap records">
               <table>
-                <thead><tr><th>رقم</th><th>التاريخ</th><th>العميل</th><th>عدد الأصناف</th><th>إجمالي العدد</th><th>المستخدم</th></tr></thead>
+                <thead><tr><th>رقم</th><th>التاريخ</th><th>العميل</th><th>عدد الأصناف</th><th>إجمالي العدد</th><th>المستخدم</th><th></th></tr></thead>
                 <tbody id="deliveryNoteRows"></tbody>
               </table>
             </div>
