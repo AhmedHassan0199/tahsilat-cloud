@@ -584,6 +584,59 @@ label.check input {
   width: 100%;
 }
 
+.invoice-items {
+  display: grid;
+  gap: 10px;
+}
+
+.mini-summary,
+.invoice-total {
+  display: grid;
+  gap: 8px;
+  margin: 8px 0 12px;
+}
+
+.mini-summary div,
+.invoice-total div {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 6px;
+}
+
+.mini-summary dt,
+.invoice-total dt {
+  color: #667085;
+}
+
+.mini-summary dd,
+.invoice-total dd {
+  margin: 0;
+  font-weight: 700;
+}
+
+.modal {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: grid;
+  place-items: center;
+  padding: 18px;
+  background: rgba(15, 23, 42, .45);
+}
+
+.modal-panel {
+  width: min(980px, 100%);
+  max-height: min(760px, 92vh);
+  overflow: auto;
+  background: #fff;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  box-shadow: 0 24px 60px rgba(15, 23, 42, .28);
+  padding: 16px;
+}
+
 .form-actions {
   display: flex;
   gap: 8px;

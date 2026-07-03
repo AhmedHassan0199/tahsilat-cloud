@@ -70,6 +70,8 @@ async function handleApi(request, env, url) {
     if (method === "PUT") return updateDeliveryNote(request, env, user, id);
     if (method === "DELETE") return deleteDeliveryNote(env, user, id);
   }
+  if (url.pathname === "/api/invoices" && method === "GET") return listInvoices(env);
+  if (url.pathname === "/api/invoices" && method === "POST") return createInvoice(request, env, user);
   if (url.pathname === "/api/payment-methods" && method === "GET") return paymentMethods(env);
   if (url.pathname === "/api/payment-methods" && method === "POST") return createPaymentMethod(request, env, user);
   if (url.pathname === "/api/expense-accounts" && method === "GET") return expenseAccounts(env);
@@ -108,6 +110,7 @@ async function health(env) {
   checks.custody_holders = await env.DB.prepare("SELECT COUNT(*) AS count FROM custody_holders").first().catch(() => ({ count: "migration_needed" }));
   checks.supply_orders = await env.DB.prepare("SELECT COUNT(*) AS count FROM supply_orders").first().catch(() => ({ count: "migration_needed" }));
   checks.delivery_notes = await env.DB.prepare("SELECT COUNT(*) AS count FROM delivery_notes").first().catch(() => ({ count: "migration_needed" }));
+  checks.invoices = await env.DB.prepare("SELECT COUNT(*) AS count FROM invoices").first().catch(() => ({ count: "migration_needed" }));
   checks.transfers = await env.DB.prepare("SELECT COUNT(*) AS count FROM transfers").first().catch(() => ({ count: "migration_needed" }));
   checks.expense_accounts = await env.DB.prepare("SELECT COUNT(*) AS count FROM expense_accounts").first().catch(() => ({ count: "migration_needed" }));
   checks.payment_methods = await env.DB.prepare("SELECT COUNT(*) AS count FROM payment_methods").first();
@@ -899,6 +902,117 @@ async function deleteDeliveryNote(env, user, id) {
   return json({ ok: true });
 }
 
+async function listInvoices(env) {
+  const result = await env.DB.prepare(
+    `SELECT invoices.*, users.display_name AS created_by_name, COUNT(invoice_items.id) AS item_count
+     FROM invoices
+     LEFT JOIN invoice_items ON invoice_items.invoice_id = invoices.id
+     LEFT JOIN users ON users.id = invoices.created_by
+     GROUP BY invoices.id
+     ORDER BY COALESCE(invoice_date, '') DESC, invoices.id DESC
+     LIMIT 300`
+  ).all();
+  return json({ items: result.results });
+}
+
+function invoiceData(payload) {
+  return {
+    invoice_date: parseDateValue(payload.invoice_date) || new Date().toISOString().slice(0, 10),
+    delivery_note_id: Number(payload.delivery_note_id || 0) || null,
+    delivery_charge: Number(payload.delivery_charge || 0),
+    note: String(payload.note || "").trim() || null,
+    items: Array.isArray(payload.items) ? payload.items : [],
+  };
+}
+
+async function createInvoice(request, env, user) {
+  assertCanWrite(user);
+  const data = invoiceData(await readJson(request));
+  if (!data.delivery_note_id) throw new HttpError("إذن التسليم مطلوب", 400);
+  if (!Number.isFinite(data.delivery_charge) || data.delivery_charge < 0) throw new HttpError("مصاريف النقل غير صحيحة", 400);
+  const deliveryNote = await deliveryNoteWithItems(env, data.delivery_note_id);
+  if (!deliveryNote) throw new HttpError("إذن التسليم غير صحيح", 400);
+  if (!deliveryNote.items.length) throw new HttpError("إذن التسليم لا يحتوي على أصناف", 400);
+  const existing = await env.DB.prepare("SELECT id FROM invoices WHERE delivery_note_id = ?").bind(data.delivery_note_id).first();
+  if (existing) throw new HttpError("تم إصدار فاتورة لهذا إذن التسليم بالفعل", 400);
+
+  const payloadItems = new Map(data.items.map((item) => [String(item.delivery_note_item_id), item]));
+  const items = [];
+  let requiresDeliveryCharge = false;
+
+  for (const noteItem of deliveryNote.items) {
+    const payloadItem = payloadItems.get(String(noteItem.id));
+    if (!payloadItem) throw new HttpError(`بيانات الفاتورة ناقصة للسطر ${noteItem.line_no}`, 400);
+    let supplyOrderId = Number(payloadItem.supply_order_id || 0) || null;
+    let priceType = String(payloadItem.price_type || "").trim();
+    let unitPrice = Number(payloadItem.unit_price || 0);
+
+    if (noteItem.product_type === "غطيان") {
+      supplyOrderId = null;
+      priceType = "manual";
+      if (!Number.isFinite(unitPrice) || unitPrice < 0) throw new HttpError(`سعر الغطيان غير صحيح في السطر ${noteItem.line_no}`, 400);
+    } else {
+      if (!supplyOrderId) throw new HttpError(`أمر التوريد مطلوب في السطر ${noteItem.line_no}`, 400);
+      const order = await env.DB.prepare("SELECT * FROM supply_orders WHERE id = ?").bind(supplyOrderId).first();
+      if (!order) throw new HttpError(`أمر التوريد غير صحيح في السطر ${noteItem.line_no}`, 400);
+      if (Number(order.customer_id) !== Number(deliveryNote.customer_id)) throw new HttpError(`أمر التوريد لا يخص نفس العميل في السطر ${noteItem.line_no}`, 400);
+      if (Number(order.design_id) !== Number(noteItem.design_id) || Number(order.size_id) !== Number(noteItem.size_id)) {
+        throw new HttpError(`أمر التوريد لا يطابق التصميم والمقاس في السطر ${noteItem.line_no}`, 400);
+      }
+      if (order.delivery_cost_party === "العميل") requiresDeliveryCharge = true;
+      if (priceType === "with_cover") unitPrice = Number(order.price_with_cover || 0);
+      else if (priceType === "without_cover") unitPrice = Number(order.price_without_cover || 0);
+      else throw new HttpError(`نوع السعر مطلوب في السطر ${noteItem.line_no}`, 400);
+    }
+
+    const quantity = Number(noteItem.quantity_amount || 0);
+    const lineTotal = quantity * unitPrice;
+    items.push({
+      delivery_note_item_id: noteItem.id,
+      line_no: noteItem.line_no,
+      product_type: noteItem.product_type,
+      design_id: noteItem.design_id,
+      design_name: noteItem.design_name,
+      size_id: noteItem.size_id,
+      size_name: noteItem.size_name,
+      quantity_unit: noteItem.quantity_unit,
+      quantity_amount: quantity,
+      supply_order_id: supplyOrderId,
+      price_type: priceType,
+      unit_price: unitPrice,
+      line_total: lineTotal,
+    });
+  }
+
+  if (requiresDeliveryCharge && data.delivery_charge <= 0) throw new HttpError("مصاريف النقل مطلوبة لأن أحد أوامر التوريد النقل فيه على العميل", 400);
+  const subtotal = items.reduce((sum, item) => sum + item.line_total, 0);
+  const total = subtotal + data.delivery_charge;
+  const now = nowIso();
+  const result = await env.DB.prepare(
+    `INSERT INTO invoices(invoice_date, delivery_note_id, customer_id, customer_name, subtotal, delivery_charge, total, note, created_by, created_at, updated_at)
+     VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).bind(data.invoice_date, deliveryNote.id, deliveryNote.customer_id, deliveryNote.customer_name, subtotal, data.delivery_charge, total, data.note, user.id, now, now).run();
+  const invoiceId = result.meta.last_row_id;
+  for (const item of items) {
+    await env.DB.prepare(
+      `INSERT INTO invoice_items(invoice_id, delivery_note_item_id, line_no, product_type, design_id, design_name, size_id, size_name, quantity_unit, quantity_amount, supply_order_id, price_type, unit_price, line_total)
+       VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).bind(invoiceId, item.delivery_note_item_id, item.line_no, item.product_type, item.design_id, item.design_name, item.size_id, item.size_name, item.quantity_unit, item.quantity_amount, item.supply_order_id, item.price_type, item.unit_price, item.line_total).run();
+  }
+  await insertAudit(env, request, user, "INSERT", "invoices", invoiceId, null, {
+    invoice_date: data.invoice_date,
+    delivery_note_id: deliveryNote.id,
+    customer_id: deliveryNote.customer_id,
+    customer_name: deliveryNote.customer_name,
+    subtotal,
+    delivery_charge: data.delivery_charge,
+    total,
+    note: data.note,
+    items,
+  });
+  return json({ id: invoiceId, subtotal, delivery_charge: data.delivery_charge, total });
+}
+
 async function createCollection(request, env, user) {
   assertCanWrite(user);
   const data = await applyCollectionCustody(env, await applyCustomer(env, collectionData(await readJson(request))));
@@ -1521,7 +1635,7 @@ async function auditLog(env, user) {
 async function backup(env, user) {
   if (user.role !== "admin") throw new HttpError("Admins only", 403);
   const tables = {};
-  for (const table of ["users", "payment_methods", "expense_accounts", "customers", "custody_holders", "designs", "product_sizes", "materials", "collections", "expenses", "transfers", "supply_orders", "delivery_notes", "delivery_note_items", "audit_logs"]) {
+  for (const table of ["users", "payment_methods", "expense_accounts", "customers", "custody_holders", "designs", "product_sizes", "materials", "collections", "expenses", "transfers", "supply_orders", "delivery_notes", "delivery_note_items", "invoices", "invoice_items", "audit_logs"]) {
     const result = await env.DB.prepare(`SELECT * FROM ${table} ORDER BY id`).all();
     tables[table] = result.results.map((row) => {
       if (table !== "users") return row;

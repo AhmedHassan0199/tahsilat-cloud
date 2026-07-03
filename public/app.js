@@ -14,6 +14,8 @@ const state = {
   transfers: [],
   supplyOrders: [],
   deliveryNotes: [],
+  invoices: [],
+  invoiceDraft: null,
   deliveryDraft: { index: 0, items: [] },
   audit: [],
   users: [],
@@ -364,6 +366,138 @@ function renderDeliveryDraftRows() {
   }).join("");
 }
 
+function fillInvoiceDeliverySelect() {
+  const select = qs('#invoiceForm select[name="delivery_note_id"]');
+  if (!select) return;
+  const current = select.value;
+  const invoiced = new Set(state.invoices.map((invoice) => String(invoice.delivery_note_id)));
+  select.innerHTML = `<option value="">اختر إذن التسليم</option>`;
+  state.deliveryNotes.forEach((note) => {
+    if (invoiced.has(String(note.id))) return;
+    const option = document.createElement("option");
+    option.value = note.id;
+    option.textContent = `#${note.id} - ${note.customer_name} - ${note.delivery_date || ""}`;
+    select.appendChild(option);
+  });
+  if (current) select.value = current;
+}
+
+function matchingSupplyOrders(note, item) {
+  return state.supplyOrders.filter((order) => (
+    String(order.customer_id) === String(note.customer_id)
+    && String(order.design_id || "") === String(item.design_id || "")
+    && String(order.size_id || "") === String(item.size_id || "")
+  ));
+}
+
+function selectedDeliveryNote() {
+  const id = qs('#invoiceForm select[name="delivery_note_id"]')?.value;
+  return state.deliveryNotes.find((note) => String(note.id) === String(id));
+}
+
+function resetInvoiceForm() {
+  const form = qs("#invoiceForm");
+  if (!form) return;
+  form.reset();
+  form.delivery_charge.value = "0";
+  state.invoiceDraft = null;
+  fillInvoiceDeliverySelect();
+  renderInvoiceEditor();
+}
+
+function buildInvoiceDraft(note) {
+  return {
+    delivery_note_id: note.id,
+    items: (note.items || []).map((item) => ({
+      delivery_note_item_id: item.id,
+      supply_order_id: "",
+      price_type: item.product_type === "غطيان" ? "manual" : "without_cover",
+      unit_price: 0,
+    })),
+  };
+}
+
+function syncInvoiceDraftFromDom() {
+  if (!state.invoiceDraft) return;
+  state.invoiceDraft.items.forEach((item) => {
+    const row = qs(`[data-invoice-item="${item.delivery_note_item_id}"]`);
+    if (!row) return;
+    item.supply_order_id = row.querySelector('[name="supply_order_id"]')?.value || "";
+    item.price_type = row.querySelector('[name="price_type"]')?.value || "manual";
+    item.unit_price = Number(row.querySelector('[name="unit_price"]')?.value || 0);
+  });
+}
+
+function invoiceLineTotal(noteItem, draftItem) {
+  return Number(noteItem.quantity_amount || 0) * Number(draftItem.unit_price || 0);
+}
+
+function invoiceNeedsDeliveryCharge() {
+  if (!state.invoiceDraft) return false;
+  return state.invoiceDraft.items.some((item) => {
+    const order = state.supplyOrders.find((row) => String(row.id) === String(item.supply_order_id));
+    return order?.delivery_cost_party === "العميل";
+  });
+}
+
+function invoiceTotals() {
+  const note = selectedDeliveryNote();
+  if (!note || !state.invoiceDraft) return { subtotal: 0, deliveryCharge: 0, total: 0 };
+  const subtotal = (note.items || []).reduce((sum, noteItem) => {
+    const draftItem = state.invoiceDraft.items.find((row) => String(row.delivery_note_item_id) === String(noteItem.id));
+    return sum + (draftItem ? invoiceLineTotal(noteItem, draftItem) : 0);
+  }, 0);
+  const deliveryCharge = Number(qs('#invoiceForm input[name="delivery_charge"]')?.value || 0);
+  return { subtotal, deliveryCharge, total: subtotal + deliveryCharge };
+}
+
+function renderInvoiceEditor() {
+  const host = qs("#invoiceItemEditor");
+  if (!host) return;
+  const note = selectedDeliveryNote();
+  if (!note) {
+    host.innerHTML = `<p class="muted">اختر إذن التسليم لبدء إصدار الفاتورة.</p>`;
+    qs("#invoiceDeliveryChargeWrap").classList.add("hidden");
+    return;
+  }
+  if (!state.invoiceDraft || String(state.invoiceDraft.delivery_note_id) !== String(note.id)) {
+    state.invoiceDraft = buildInvoiceDraft(note);
+  }
+  host.innerHTML = (note.items || []).map((noteItem, index) => {
+    const draftItem = state.invoiceDraft.items[index];
+    const orders = noteItem.product_type === "غطيان" ? [] : matchingSupplyOrders(note, noteItem);
+    const selectedOrder = state.supplyOrders.find((order) => String(order.id) === String(draftItem.supply_order_id));
+    if (selectedOrder && draftItem.price_type === "with_cover") draftItem.unit_price = Number(selectedOrder.price_with_cover || 0);
+    if (selectedOrder && draftItem.price_type === "without_cover") draftItem.unit_price = Number(selectedOrder.price_without_cover || 0);
+    return `
+      <div class="line-card" data-invoice-item="${noteItem.id}">
+        <div class="line-card-head"><strong>الصنف ${index + 1}</strong><span>${noteItem.product_type}</span></div>
+        <dl class="mini-summary">
+          <div><dt>التصميم</dt><dd>${noteItem.design_name || "-"}</dd></div>
+          <div><dt>المقاس</dt><dd>${noteItem.size_name || "-"}</dd></div>
+          <div><dt>العدد</dt><dd>${money(noteItem.quantity_amount)} ${noteItem.quantity_unit || ""}</dd></div>
+        </dl>
+        ${noteItem.product_type === "غطيان" ? `
+          <input type="hidden" name="price_type" value="manual">
+          <label>سعر الغطيان<input name="unit_price" type="number" min="0" step="0.01" value="${draftItem.unit_price || 0}"></label>
+        ` : `
+          <label>أمر التوريد<select name="supply_order_id" required>
+            <option value="">اختر أمر التوريد</option>
+            ${orders.map((order) => `<option value="${order.id}" ${String(order.id) === String(draftItem.supply_order_id) ? "selected" : ""}>#${order.id} - ${order.order_date || ""} - بدون ${money(order.price_without_cover)} / بغطاء ${money(order.price_with_cover)}</option>`).join("")}
+          </select></label>
+          <label>نوع السعر<select name="price_type">
+            <option value="without_cover" ${draftItem.price_type === "without_cover" ? "selected" : ""}>بدون غطاء - ${selectedOrder ? money(selectedOrder.price_without_cover) : "0"}</option>
+            <option value="with_cover" ${draftItem.price_type === "with_cover" ? "selected" : ""}>بغطاء - ${selectedOrder ? money(selectedOrder.price_with_cover) : "0"}</option>
+          </select></label>
+          <label>السعر المستخدم<input name="unit_price" type="number" min="0" step="0.01" value="${draftItem.unit_price || 0}" readonly></label>
+        `}
+        <strong>إجمالي الصنف: ${money(invoiceLineTotal(noteItem, draftItem))}</strong>
+      </div>
+    `;
+  }).join("");
+  qs("#invoiceDeliveryChargeWrap").classList.toggle("hidden", !invoiceNeedsDeliveryCharge());
+}
+
 function addMonthOptions() {
   ["#collectionMonth", "#expenseMonth"].forEach((id) => {
     const select = qs(id);
@@ -656,6 +790,22 @@ function renderDeliveryNotes() {
   `).join("") || `<tr><td colspan="7" class="muted">لا توجد أذونات تسليم مسجلة</td></tr>`;
 }
 
+function renderInvoices() {
+  const body = qs("#invoiceRows");
+  if (!body) return;
+  body.innerHTML = state.invoices.map((item) => `
+    <tr>
+      <td data-label="رقم">${item.id}</td>
+      <td data-label="التاريخ">${item.invoice_date || "-"}</td>
+      <td data-label="إذن التسليم">#${item.delivery_note_id}</td>
+      <td data-label="العميل">${item.customer_name || "-"}</td>
+      <td data-label="الأصناف">${money(item.item_count)}</td>
+      <td data-label="الإجمالي">${money(item.total)}</td>
+      <td data-label="المستخدم">${item.created_by_name || "-"}</td>
+    </tr>
+  `).join("") || `<tr><td colspan="7" class="muted">لا توجد فواتير مسجلة</td></tr>`;
+}
+
 function renderUsers() {
   const body = qs("#userRows");
   if (!body) return;
@@ -765,6 +915,7 @@ async function loadBootstrap() {
   fillExpenseReportCodes();
   fillSupplyOrderFormLookups();
   fillDeliveryNoteFormLookups();
+  fillInvoiceDeliverySelect();
   qsa('select[name="source_method"]').forEach((select) => fillSelect(select, state.paymentMethods));
   qsa('select[name="target_method"]').forEach((select) => fillSelect(select, state.paymentMethods));
   fillCustodyDatalist();
@@ -820,12 +971,22 @@ async function loadSupplyOrders() {
   const data = await api("/api/supply-orders");
   state.supplyOrders = data.items;
   renderSupplyOrders();
+  renderInvoiceEditor();
 }
 
 async function loadDeliveryNotes() {
   const data = await api("/api/delivery-notes");
   state.deliveryNotes = data.items;
   renderDeliveryNotes();
+  fillInvoiceDeliverySelect();
+  renderInvoiceEditor();
+}
+
+async function loadInvoices() {
+  const data = await api("/api/invoices");
+  state.invoices = data.items;
+  renderInvoices();
+  fillInvoiceDeliverySelect();
 }
 
 async function loadUsers() {
@@ -887,7 +1048,7 @@ async function loadResponsibleMonthly() {
 
 async function reloadAll() {
   await loadBootstrap();
-  await Promise.all([loadDashboard(), loadCollections(), loadCustomers(), loadExpenses(), loadTransfers(), loadSupplyOrders(), loadDeliveryNotes(), loadUsers(), loadAudit(), loadExpenseReport(), loadCollectionReport(), loadResponsibleMonthly()]);
+  await Promise.all([loadDashboard(), loadCollections(), loadCustomers(), loadExpenses(), loadTransfers(), loadSupplyOrders(), loadDeliveryNotes(), loadInvoices(), loadUsers(), loadAudit(), loadExpenseReport(), loadCollectionReport(), loadResponsibleMonthly()]);
 }
 
 function formData(form) {
@@ -1049,6 +1210,82 @@ async function saveDeliveryNote(event) {
   }
   resetDeliveryNoteForm();
   await Promise.all([loadDeliveryNotes(), loadAudit()]);
+}
+
+function invoicePayload() {
+  const form = qs("#invoiceForm");
+  const note = selectedDeliveryNote();
+  if (!note) throw new Error("إذن التسليم مطلوب");
+  syncInvoiceDraftFromDom();
+  const needsDelivery = invoiceNeedsDeliveryCharge();
+  const deliveryCharge = Number(form.delivery_charge.value || 0);
+  if (needsDelivery && deliveryCharge <= 0) throw new Error("مصاريف النقل مطلوبة لأن النقل على العميل");
+  const items = (note.items || []).map((noteItem) => {
+    const draftItem = state.invoiceDraft.items.find((row) => String(row.delivery_note_item_id) === String(noteItem.id));
+    if (!draftItem) throw new Error(`بيانات الصنف ${noteItem.line_no} ناقصة`);
+    if (noteItem.product_type !== "غطيان" && !draftItem.supply_order_id) throw new Error(`اختر أمر التوريد للصنف ${noteItem.line_no}`);
+    if (!Number.isFinite(Number(draftItem.unit_price)) || Number(draftItem.unit_price) < 0) throw new Error(`السعر غير صحيح للصنف ${noteItem.line_no}`);
+    return {
+      delivery_note_item_id: noteItem.id,
+      supply_order_id: draftItem.supply_order_id,
+      price_type: draftItem.price_type,
+      unit_price: Number(draftItem.unit_price || 0),
+    };
+  });
+  return {
+    invoice_date: form.invoice_date.value,
+    delivery_note_id: note.id,
+    delivery_charge: needsDelivery ? deliveryCharge : 0,
+    note: form.note.value.trim(),
+    items,
+  };
+}
+
+function showInvoiceReview() {
+  const payload = invoicePayload();
+  const note = selectedDeliveryNote();
+  const totals = invoiceTotals();
+  const rows = (note.items || []).map((noteItem) => {
+    const draftItem = state.invoiceDraft.items.find((item) => String(item.delivery_note_item_id) === String(noteItem.id));
+    const order = state.supplyOrders.find((item) => String(item.id) === String(draftItem?.supply_order_id));
+    return `
+      <tr>
+        <td>${noteItem.product_type}</td>
+        <td>${noteItem.design_name || "-"}</td>
+        <td>${noteItem.size_name || "-"}</td>
+        <td>${money(noteItem.quantity_amount)} ${noteItem.quantity_unit || ""}</td>
+        <td>${order ? `#${order.id}` : "-"}</td>
+        <td>${draftItem?.price_type === "with_cover" ? "بغطاء" : draftItem?.price_type === "without_cover" ? "بدون غطاء" : "يدوي"}</td>
+        <td>${money(draftItem?.unit_price)}</td>
+        <td>${money(invoiceLineTotal(noteItem, draftItem))}</td>
+      </tr>
+    `;
+  }).join("");
+  qs("#invoiceReviewSummary").innerHTML = `
+    <p><strong>العميل:</strong> ${note.customer_name}</p>
+    <p><strong>إذن التسليم:</strong> #${note.id}</p>
+    <div class="table-wrap records">
+      <table>
+        <thead><tr><th>الصنف</th><th>التصميم</th><th>المقاس</th><th>العدد</th><th>أمر التوريد</th><th>نوع السعر</th><th>السعر</th><th>الإجمالي</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>
+    <dl class="invoice-total">
+      <div><dt>إجمالي الأصناف</dt><dd>${money(totals.subtotal)}</dd></div>
+      <div><dt>مصاريف النقل</dt><dd>${money(payload.delivery_charge)}</dd></div>
+      <div><dt>إجمالي الفاتورة</dt><dd>${money(totals.subtotal + payload.delivery_charge)}</dd></div>
+    </dl>
+  `;
+  qs("#invoiceReviewModal").classList.remove("hidden");
+}
+
+async function issueInvoice() {
+  const payload = invoicePayload();
+  await api("/api/invoices", { method: "POST", body: JSON.stringify(payload) });
+  qs("#invoiceReviewModal").classList.add("hidden");
+  resetInvoiceForm();
+  showToast("تم إصدار الفاتورة");
+  await Promise.all([loadInvoices(), loadAudit()]);
 }
 
 async function saveUser(event) {
@@ -1289,6 +1526,24 @@ function bindEvents() {
   qs("#cancelTransferEdit").addEventListener("click", resetTransferForm);
   qs("#cancelSupplyOrderEdit").addEventListener("click", resetSupplyOrderForm);
   qs("#cancelDeliveryNoteEdit").addEventListener("click", resetDeliveryNoteForm);
+  qs('#invoiceForm select[name="delivery_note_id"]').addEventListener("change", () => {
+    const note = selectedDeliveryNote();
+    state.invoiceDraft = note ? buildInvoiceDraft(note) : null;
+    renderInvoiceEditor();
+  });
+  qs("#reviewInvoiceBtn").addEventListener("click", () => {
+    try {
+      showInvoiceReview();
+    } catch (error) {
+      showToast(error.message, true);
+    }
+  });
+  qs("#issueInvoiceBtn").addEventListener("click", () => {
+    issueInvoice().catch((error) => showToast(error.message, true));
+  });
+  qs("#continueInvoiceEditBtn").addEventListener("click", () => {
+    qs("#invoiceReviewModal").classList.add("hidden");
+  });
   qs("#nextDeliveryItemBtn").addEventListener("click", () => {
     const form = qs("#deliveryNoteForm");
     if (!form.reportValidity()) return;
@@ -1334,6 +1589,25 @@ function bindEvents() {
       renderDeliveryDraftRows();
     });
   });
+  qs("#invoiceItemEditor").addEventListener("change", (event) => {
+    const row = event.target.closest("[data-invoice-item]");
+    if (!row) return;
+    const draftItem = state.invoiceDraft?.items.find((item) => String(item.delivery_note_item_id) === String(row.dataset.invoiceItem));
+    if (!draftItem) return;
+    draftItem.supply_order_id = row.querySelector('[name="supply_order_id"]')?.value || "";
+    draftItem.price_type = row.querySelector('[name="price_type"]')?.value || "manual";
+    const order = state.supplyOrders.find((item) => String(item.id) === String(draftItem.supply_order_id));
+    if (order && draftItem.price_type === "with_cover") draftItem.unit_price = Number(order.price_with_cover || 0);
+    else if (order && draftItem.price_type === "without_cover") draftItem.unit_price = Number(order.price_without_cover || 0);
+    else draftItem.unit_price = Number(row.querySelector('[name="unit_price"]')?.value || 0);
+    renderInvoiceEditor();
+  });
+  qs("#invoiceItemEditor").addEventListener("input", (event) => {
+    if (event.target.name !== "unit_price") return;
+    const row = event.target.closest("[data-invoice-item]");
+    const draftItem = state.invoiceDraft?.items.find((item) => String(item.delivery_note_item_id) === String(row?.dataset.invoiceItem));
+    if (draftItem) draftItem.unit_price = Number(event.target.value || 0);
+  });
 
   document.addEventListener("click", (event) => {
     const collectionEdit = event.target.closest("[data-edit-collection]");
@@ -1376,6 +1650,7 @@ async function init() {
     resetExpenseForm();
     resetSupplyOrderForm();
     resetDeliveryNoteForm();
+    resetInvoiceForm();
     showApp();
     showToast("النظام جاهز");
   } catch (error) {

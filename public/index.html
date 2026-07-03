@@ -63,6 +63,7 @@
         <button class="tab" data-tab="customers" type="button">العملاء</button>
         <button class="tab" data-tab="supplyOrders" type="button">أمر التوريد</button>
         <button class="tab" data-tab="deliveryNotes" type="button">إذن التسليم</button>
+        <button class="tab" data-tab="invoices" type="button">الفواتير</button>
         <button class="tab" data-tab="expenses" type="button">المصروفات</button>
         <button class="tab" data-tab="treasury" type="button">الخزينة</button>
         <button class="tab" data-tab="transfers" type="button">توسيط</button>
@@ -273,6 +274,29 @@
         </div>
       </section>
 
+      <section id="invoices" class="tab-panel">
+        <div class="entry-layout supply-layout">
+          <form id="invoiceForm" class="form-panel">
+            <h2>إصدار فاتورة</h2>
+            <label>تاريخ الفاتورة<input name="invoice_date" type="date"></label>
+            <label>إذن التسليم<select name="delivery_note_id" required></select></label>
+            <label id="invoiceDeliveryChargeWrap" class="hidden">مصاريف النقل<input name="delivery_charge" type="number" min="0" step="0.01" value="0"></label>
+            <label class="wide">ملاحظة<textarea name="note" rows="2"></textarea></label>
+            <div id="invoiceItemEditor" class="invoice-items"></div>
+            <div class="form-actions"><button class="primary-wide" type="button" id="reviewInvoiceBtn">مراجعة الفاتورة</button></div>
+          </form>
+          <div class="panel">
+            <div class="panel-head"><h2>الفواتير المسجلة</h2></div>
+            <div class="table-wrap records">
+              <table>
+                <thead><tr><th>رقم</th><th>التاريخ</th><th>إذن التسليم</th><th>العميل</th><th>الأصناف</th><th>الإجمالي</th><th>المستخدم</th></tr></thead>
+                <tbody id="invoiceRows"></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </section>
+
       <section id="expenses" class="tab-panel">
         <div class="entry-layout">
           <form id="expenseForm" class="form-panel">
@@ -462,6 +486,16 @@
     </section>
   </main>
 
+  </div>
+  <div id="invoiceReviewModal" class="modal hidden" role="dialog" aria-modal="true">
+    <div class="modal-panel">
+      <div class="panel-head"><h2>مراجعة الفاتورة</h2></div>
+      <div id="invoiceReviewSummary"></div>
+      <div class="form-actions">
+        <button id="issueInvoiceBtn" type="button">إصدار الفاتورة</button>
+        <button id="continueInvoiceEditBtn" class="secondary" type="button">أكمل التعديل</button>
+      </div>
+    </div>
   </div>
   <datalist id="custodyHolderOptions"></datalist>
   <div id="toast" role="status" aria-live="polite"></div>
