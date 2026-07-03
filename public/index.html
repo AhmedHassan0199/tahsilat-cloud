@@ -277,7 +277,8 @@
       <section id="invoices" class="tab-panel">
         <div class="entry-layout supply-layout">
           <form id="invoiceForm" class="form-panel">
-            <h2>إصدار فاتورة</h2>
+            <h2 id="invoiceFormTitle">إصدار فاتورة</h2>
+            <input type="hidden" name="id">
             <label>تاريخ الفاتورة<input name="invoice_date" type="date"></label>
             <label>إذن التسليم<select name="delivery_note_id" required></select></label>
             <label id="invoiceDeliveryChargeWrap" class="hidden">مصاريف النقل<input name="delivery_charge" type="number" min="0" step="0.01" value="0"></label>
@@ -289,7 +290,7 @@
             <div class="panel-head"><h2>الفواتير المسجلة</h2></div>
             <div class="table-wrap records">
               <table>
-                <thead><tr><th>رقم</th><th>التاريخ</th><th>إذن التسليم</th><th>العميل</th><th>الأصناف</th><th>الإجمالي</th><th>المستخدم</th></tr></thead>
+                <thead><tr><th>رقم</th><th>التاريخ</th><th>إذن التسليم</th><th>العميل</th><th>الأصناف</th><th>الإجمالي</th><th>المستخدم</th><th></th></tr></thead>
                 <tbody id="invoiceRows"></tbody>
               </table>
             </div>

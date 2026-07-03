@@ -370,10 +370,12 @@ function fillInvoiceDeliverySelect() {
   const select = qs('#invoiceForm select[name="delivery_note_id"]');
   if (!select) return;
   const current = select.value;
+  const editingInvoiceId = qs('#invoiceForm input[name="id"]')?.value || "";
+  const editingInvoice = state.invoices.find((invoice) => String(invoice.id) === String(editingInvoiceId));
   const invoiced = new Set(state.invoices.map((invoice) => String(invoice.delivery_note_id)));
   select.innerHTML = `<option value="">اختر إذن التسليم</option>`;
   state.deliveryNotes.forEach((note) => {
-    if (invoiced.has(String(note.id))) return;
+    if (invoiced.has(String(note.id)) && String(note.id) !== String(editingInvoice?.delivery_note_id || "")) return;
     const option = document.createElement("option");
     option.value = note.id;
     option.textContent = `#${note.id} - ${note.customer_name} - ${note.delivery_date || ""}`;
@@ -399,6 +401,8 @@ function resetInvoiceForm() {
   const form = qs("#invoiceForm");
   if (!form) return;
   form.reset();
+  form.elements.id.value = "";
+  qs("#invoiceFormTitle").textContent = "إصدار فاتورة";
   form.delivery_charge.value = "0";
   state.invoiceDraft = null;
   fillInvoiceDeliverySelect();
@@ -802,8 +806,12 @@ function renderInvoices() {
       <td data-label="الأصناف">${money(item.item_count)}</td>
       <td data-label="الإجمالي">${money(item.total)}</td>
       <td data-label="المستخدم">${item.created_by_name || "-"}</td>
+      <td class="actions">
+        <button type="button" data-edit-invoice="${item.id}" title="تعديل">✎</button>
+        <button class="danger" type="button" data-delete-invoice="${item.id}" title="حذف">×</button>
+      </td>
     </tr>
-  `).join("") || `<tr><td colspan="7" class="muted">لا توجد فواتير مسجلة</td></tr>`;
+  `).join("") || `<tr><td colspan="8" class="muted">لا توجد فواتير مسجلة</td></tr>`;
 }
 
 function renderUsers() {
@@ -1281,10 +1289,15 @@ function showInvoiceReview() {
 
 async function issueInvoice() {
   const payload = invoicePayload();
-  await api("/api/invoices", { method: "POST", body: JSON.stringify(payload) });
+  const id = qs('#invoiceForm input[name="id"]').value;
+  if (id) {
+    await api(`/api/invoices/${id}`, { method: "PUT", body: JSON.stringify(payload) });
+  } else {
+    await api("/api/invoices", { method: "POST", body: JSON.stringify(payload) });
+  }
   qs("#invoiceReviewModal").classList.add("hidden");
   resetInvoiceForm();
-  showToast("تم إصدار الفاتورة");
+  showToast(id ? "تم تعديل الفاتورة" : "تم إصدار الفاتورة");
   await Promise.all([loadInvoices(), loadAudit()]);
 }
 
@@ -1438,15 +1451,43 @@ function editDeliveryNote(id) {
   form.scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
+function editInvoice(id) {
+  const item = state.invoices.find((row) => String(row.id) === String(id));
+  if (!item) return;
+  const form = qs("#invoiceForm");
+  form.elements.id.value = item.id;
+  form.invoice_date.value = item.invoice_date || "";
+  form.delivery_charge.value = item.delivery_charge || 0;
+  form.note.value = item.note || "";
+  fillInvoiceDeliverySelect();
+  form.delivery_note_id.value = item.delivery_note_id || "";
+  const note = selectedDeliveryNote();
+  state.invoiceDraft = {
+    delivery_note_id: item.delivery_note_id,
+    items: (note?.items || []).map((noteItem) => {
+      const invoiceItem = (item.items || []).find((row) => String(row.delivery_note_item_id) === String(noteItem.id));
+      return {
+        delivery_note_item_id: noteItem.id,
+        supply_order_id: invoiceItem?.supply_order_id || "",
+        price_type: invoiceItem?.price_type || (noteItem.product_type === "غطيان" ? "manual" : "without_cover"),
+        unit_price: invoiceItem?.unit_price || 0,
+      };
+    }),
+  };
+  qs("#invoiceFormTitle").textContent = `تعديل فاتورة #${item.id}`;
+  renderInvoiceEditor();
+  form.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
 async function removeRecord(kind, id) {
-  const labels = { collections: "التحصيل", expenses: "المصروف", transfers: "التوسيط", "supply-orders": "أمر التوريد", "delivery-notes": "إذن التسليم" };
+  const labels = { collections: "التحصيل", expenses: "المصروف", transfers: "التوسيط", "supply-orders": "أمر التوريد", "delivery-notes": "إذن التسليم", invoices: "الفاتورة" };
   const label = labels[kind] || "السجل";
   if (!confirm(`حذف ${label} رقم ${id}؟`)) return;
   await api(`/api/${kind}/${id}`, { method: "DELETE" });
   showToast("تم الحذف");
   await Promise.all([
     loadDashboard(),
-    kind === "collections" ? loadCollections() : kind === "expenses" ? loadExpenses() : kind === "transfers" ? loadTransfers() : kind === "supply-orders" ? loadSupplyOrders() : loadDeliveryNotes(),
+    kind === "collections" ? loadCollections() : kind === "expenses" ? loadExpenses() : kind === "transfers" ? loadTransfers() : kind === "supply-orders" ? loadSupplyOrders() : kind === "delivery-notes" ? loadDeliveryNotes() : loadInvoices(),
     kind === "collections" ? loadCustomers() : Promise.resolve(),
     loadAudit(),
   ]);
@@ -1620,6 +1661,8 @@ function bindEvents() {
     const supplyOrderDelete = event.target.closest("[data-delete-supply-order]");
     const deliveryNoteEdit = event.target.closest("[data-edit-delivery-note]");
     const deliveryNoteDelete = event.target.closest("[data-delete-delivery-note]");
+    const invoiceEdit = event.target.closest("[data-edit-invoice]");
+    const invoiceDelete = event.target.closest("[data-delete-invoice]");
     if (collectionEdit) editCollection(collectionEdit.dataset.editCollection);
     if (collectionDelete) removeRecord("collections", collectionDelete.dataset.deleteCollection).catch((error) => showToast(error.message, true));
     if (expenseEdit) editExpense(expenseEdit.dataset.editExpense);
@@ -1630,6 +1673,8 @@ function bindEvents() {
     if (supplyOrderDelete) removeRecord("supply-orders", supplyOrderDelete.dataset.deleteSupplyOrder).catch((error) => showToast(error.message, true));
     if (deliveryNoteEdit) editDeliveryNote(deliveryNoteEdit.dataset.editDeliveryNote);
     if (deliveryNoteDelete) removeRecord("delivery-notes", deliveryNoteDelete.dataset.deleteDeliveryNote).catch((error) => showToast(error.message, true));
+    if (invoiceEdit) editInvoice(invoiceEdit.dataset.editInvoice);
+    if (invoiceDelete) removeRecord("invoices", invoiceDelete.dataset.deleteInvoice).catch((error) => showToast(error.message, true));
   });
 }
 

@@ -72,6 +72,11 @@ async function handleApi(request, env, url) {
   }
   if (url.pathname === "/api/invoices" && method === "GET") return listInvoices(env);
   if (url.pathname === "/api/invoices" && method === "POST") return createInvoice(request, env, user);
+  if (url.pathname.startsWith("/api/invoices/")) {
+    const id = idFromPath(url.pathname);
+    if (method === "PUT") return updateInvoice(request, env, user, id);
+    if (method === "DELETE") return deleteInvoice(env, user, id);
+  }
   if (url.pathname === "/api/payment-methods" && method === "GET") return paymentMethods(env);
   if (url.pathname === "/api/payment-methods" && method === "POST") return createPaymentMethod(request, env, user);
   if (url.pathname === "/api/expense-accounts" && method === "GET") return expenseAccounts(env);
@@ -912,7 +917,18 @@ async function listInvoices(env) {
      ORDER BY COALESCE(invoice_date, '') DESC, invoices.id DESC
      LIMIT 300`
   ).all();
-  return json({ items: result.results });
+  const items = await env.DB.prepare(
+    `SELECT invoice_items.*
+     FROM invoice_items
+     JOIN invoices ON invoices.id = invoice_items.invoice_id
+     ORDER BY invoice_items.invoice_id DESC, invoice_items.line_no`
+  ).all();
+  const byInvoice = new Map();
+  items.results.forEach((item) => {
+    if (!byInvoice.has(item.invoice_id)) byInvoice.set(item.invoice_id, []);
+    byInvoice.get(item.invoice_id).push(item);
+  });
+  return json({ items: result.results.map((invoice) => ({ ...invoice, items: byInvoice.get(invoice.id) || [] })) });
 }
 
 function invoiceData(payload) {
@@ -927,14 +943,27 @@ function invoiceData(payload) {
 
 async function createInvoice(request, env, user) {
   assertCanWrite(user);
-  const data = invoiceData(await readJson(request));
+  const data = await prepareInvoice(env, await readJson(request));
+  const now = nowIso();
+  const result = await env.DB.prepare(
+    `INSERT INTO invoices(invoice_date, delivery_note_id, customer_id, customer_name, subtotal, delivery_charge, total, note, created_by, created_at, updated_at)
+     VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).bind(data.invoice_date, data.delivery_note_id, data.customer_id, data.customer_name, data.subtotal, data.delivery_charge, data.total, data.note, user.id, now, now).run();
+  const invoiceId = result.meta.last_row_id;
+  await insertInvoiceItems(env, invoiceId, data.items);
+  await insertAudit(env, request, user, "INSERT", "invoices", invoiceId, null, data);
+  return json({ id: invoiceId, subtotal: data.subtotal, delivery_charge: data.delivery_charge, total: data.total });
+}
+
+async function prepareInvoice(env, payload, invoiceId = null) {
+  const data = invoiceData(payload);
   if (!data.delivery_note_id) throw new HttpError("إذن التسليم مطلوب", 400);
   if (!Number.isFinite(data.delivery_charge) || data.delivery_charge < 0) throw new HttpError("مصاريف النقل غير صحيحة", 400);
   const deliveryNote = await deliveryNoteWithItems(env, data.delivery_note_id);
   if (!deliveryNote) throw new HttpError("إذن التسليم غير صحيح", 400);
   if (!deliveryNote.items.length) throw new HttpError("إذن التسليم لا يحتوي على أصناف", 400);
   const existing = await env.DB.prepare("SELECT id FROM invoices WHERE delivery_note_id = ?").bind(data.delivery_note_id).first();
-  if (existing) throw new HttpError("تم إصدار فاتورة لهذا إذن التسليم بالفعل", 400);
+  if (existing && String(existing.id) !== String(invoiceId || "")) throw new HttpError("تم إصدار فاتورة لهذا إذن التسليم بالفعل", 400);
 
   const payloadItems = new Map(data.items.map((item) => [String(item.delivery_note_item_id), item]));
   const items = [];
@@ -987,19 +1016,7 @@ async function createInvoice(request, env, user) {
   if (requiresDeliveryCharge && data.delivery_charge <= 0) throw new HttpError("مصاريف النقل مطلوبة لأن أحد أوامر التوريد النقل فيه على العميل", 400);
   const subtotal = items.reduce((sum, item) => sum + item.line_total, 0);
   const total = subtotal + data.delivery_charge;
-  const now = nowIso();
-  const result = await env.DB.prepare(
-    `INSERT INTO invoices(invoice_date, delivery_note_id, customer_id, customer_name, subtotal, delivery_charge, total, note, created_by, created_at, updated_at)
-     VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-  ).bind(data.invoice_date, deliveryNote.id, deliveryNote.customer_id, deliveryNote.customer_name, subtotal, data.delivery_charge, total, data.note, user.id, now, now).run();
-  const invoiceId = result.meta.last_row_id;
-  for (const item of items) {
-    await env.DB.prepare(
-      `INSERT INTO invoice_items(invoice_id, delivery_note_item_id, line_no, product_type, design_id, design_name, size_id, size_name, quantity_unit, quantity_amount, supply_order_id, price_type, unit_price, line_total)
-       VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    ).bind(invoiceId, item.delivery_note_item_id, item.line_no, item.product_type, item.design_id, item.design_name, item.size_id, item.size_name, item.quantity_unit, item.quantity_amount, item.supply_order_id, item.price_type, item.unit_price, item.line_total).run();
-  }
-  await insertAudit(env, request, user, "INSERT", "invoices", invoiceId, null, {
+  return {
     invoice_date: data.invoice_date,
     delivery_note_id: deliveryNote.id,
     customer_id: deliveryNote.customer_id,
@@ -1009,8 +1026,49 @@ async function createInvoice(request, env, user) {
     total,
     note: data.note,
     items,
-  });
-  return json({ id: invoiceId, subtotal, delivery_charge: data.delivery_charge, total });
+  };
+}
+
+async function insertInvoiceItems(env, invoiceId, items) {
+  for (const item of items) {
+    await env.DB.prepare(
+      `INSERT INTO invoice_items(invoice_id, delivery_note_item_id, line_no, product_type, design_id, design_name, size_id, size_name, quantity_unit, quantity_amount, supply_order_id, price_type, unit_price, line_total)
+       VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).bind(invoiceId, item.delivery_note_item_id, item.line_no, item.product_type, item.design_id, item.design_name, item.size_id, item.size_name, item.quantity_unit, item.quantity_amount, item.supply_order_id, item.price_type, item.unit_price, item.line_total).run();
+  }
+}
+
+async function invoiceWithItems(env, id) {
+  const invoice = await env.DB.prepare("SELECT * FROM invoices WHERE id = ?").bind(id).first();
+  if (!invoice) return null;
+  const items = await env.DB.prepare("SELECT * FROM invoice_items WHERE invoice_id = ? ORDER BY line_no").bind(id).all();
+  return { ...invoice, items: items.results };
+}
+
+async function updateInvoice(request, env, user, id) {
+  assertCanWrite(user);
+  const before = await invoiceWithItems(env, id);
+  if (!before) throw new HttpError("Record not found", 404);
+  const data = await prepareInvoice(env, await readJson(request), id);
+  await env.DB.prepare(
+    `UPDATE invoices
+     SET invoice_date=?, delivery_note_id=?, customer_id=?, customer_name=?, subtotal=?, delivery_charge=?, total=?, note=?, updated_at=?
+     WHERE id=?`
+  ).bind(data.invoice_date, data.delivery_note_id, data.customer_id, data.customer_name, data.subtotal, data.delivery_charge, data.total, data.note, nowIso(), id).run();
+  await env.DB.prepare("DELETE FROM invoice_items WHERE invoice_id = ?").bind(id).run();
+  await insertInvoiceItems(env, id, data.items);
+  await insertAudit(env, request, user, "UPDATE", "invoices", id, before, data);
+  return json({ ok: true, total: data.total });
+}
+
+async function deleteInvoice(env, user, id) {
+  assertCanWrite(user);
+  const before = await invoiceWithItems(env, id);
+  if (!before) throw new HttpError("Record not found", 404);
+  await env.DB.prepare("DELETE FROM invoice_items WHERE invoice_id = ?").bind(id).run();
+  await env.DB.prepare("DELETE FROM invoices WHERE id = ?").bind(id).run();
+  await insertAudit(env, null, user, "DELETE", "invoices", id, before, null);
+  return json({ ok: true });
 }
 
 async function createCollection(request, env, user) {
