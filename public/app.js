@@ -770,6 +770,8 @@ function renderSupplyOrders() {
       <td data-label="المستخدم">${item.created_by_name || "-"}</td>
       <td class="actions">
         <button type="button" data-edit-supply-order="${item.id}" title="تعديل">✎</button>
+        <button type="button" data-xlsx-supply-order="${item.id}" title="Excel">Excel</button>
+        <button type="button" data-pdf-supply-order="${item.id}" title="PDF">PDF</button>
         <button class="danger" type="button" data-delete-supply-order="${item.id}" title="حذف">×</button>
       </td>
     </tr>
@@ -789,6 +791,8 @@ function renderDeliveryNotes() {
       <td data-label="المستخدم">${item.created_by_name || "-"}</td>
       <td class="actions">
         <button type="button" data-edit-delivery-note="${item.id}" title="تعديل">✎</button>
+        <button type="button" data-xlsx-delivery-note="${item.id}" title="Excel">Excel</button>
+        <button type="button" data-pdf-delivery-note="${item.id}" title="PDF">PDF</button>
         <button class="danger" type="button" data-delete-delivery-note="${item.id}" title="حذف">×</button>
       </td>
     </tr>
@@ -809,6 +813,8 @@ function renderInvoices() {
       <td data-label="المستخدم">${item.created_by_name || "-"}</td>
       <td class="actions">
         <button type="button" data-edit-invoice="${item.id}" title="تعديل">✎</button>
+        <button type="button" data-xlsx-invoice="${item.id}" title="Excel">Excel</button>
+        <button type="button" data-pdf-invoice="${item.id}" title="PDF">PDF</button>
         <button class="danger" type="button" data-delete-invoice="${item.id}" title="حذف">×</button>
       </td>
     </tr>
@@ -933,6 +939,76 @@ function escapeHtml(value) {
     '"': "&quot;",
     "'": "&#039;",
   })[char]);
+}
+
+function printDocument(title, blocks) {
+  const win = window.open("", "_blank");
+  if (!win) {
+    showToast("اسمح بفتح النوافذ المنبثقة لطباعة PDF", true);
+    return;
+  }
+  const content = blocks.map((block) => {
+    if (block.type === "meta") {
+      return `<dl class="meta">${block.rows.map(([label, value]) => `<div><dt>${escapeHtml(label)}</dt><dd>${escapeHtml(value)}</dd></div>`).join("")}</dl>`;
+    }
+    if (block.type === "table") {
+      return `<h2>${escapeHtml(block.title)}</h2><table><thead><tr>${block.headers.map((head) => `<th>${escapeHtml(head)}</th>`).join("")}</tr></thead><tbody>${block.rows.map((row) => `<tr>${row.map((cell) => `<td>${escapeHtml(cell)}</td>`).join("")}</tr>`).join("")}</tbody></table>`;
+    }
+    if (block.type === "totals") {
+      return `<dl class="totals">${block.rows.map(([label, value]) => `<div><dt>${escapeHtml(label)}</dt><dd>${escapeHtml(value)}</dd></div>`).join("")}</dl>`;
+    }
+    return "";
+  }).join("");
+  win.document.write(`<!doctype html><html lang="ar" dir="rtl"><head><meta charset="utf-8"><title>${escapeHtml(title)}</title><style>
+    body{font-family:Arial,Tahoma,sans-serif;margin:24px;color:#111827}
+    h1{font-size:24px;margin:0 0 18px;text-align:center}
+    h2{font-size:18px;margin:18px 0 8px}
+    table{width:100%;border-collapse:collapse;margin-bottom:14px}
+    th,td{border:1px solid #98a2b3;padding:7px;text-align:center;font-size:12px}
+    th{background:#eef4ff}
+    .meta,.totals{display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin-bottom:12px}
+    .meta div,.totals div{border:1px solid #d0d5dd;padding:8px}
+    dt{color:#667085;font-size:12px} dd{margin:2px 0 0;font-weight:bold}
+    @media print{button{display:none} body{margin:10mm}}
+  </style></head><body><h1>${escapeHtml(title)}</h1>${content}<script>window.onload=()=>setTimeout(()=>window.print(),250)</script></body></html>`);
+  win.document.close();
+}
+
+function printSupplyOrder(id) {
+  const item = state.supplyOrders.find((row) => String(row.id) === String(id));
+  if (!item) return;
+  printDocument(`أمر توريد #${item.id}`, [
+    { type: "meta", rows: [["التاريخ", item.order_date || "-"], ["العميل", item.customer_name || "-"], ["التصميم", item.design_name || "-"], ["المقاس", item.size_name || "-"], ["الخامة", item.material_name || "-"], ["الكمية", `${money(item.quantity_amount)} ${item.quantity_unit || ""}`], ["السعر بدون غطاء", money(item.price_without_cover)], ["السعر بالغطاء", money(item.price_with_cover)], ["سعر السريل", money(item.serial_color_price)], ["تكلفة النقل", item.delivery_cost_party || "-"], ["تاريخ التوريد", item.supply_date || "-"], ["ملاحظة", item.note || "-"]] },
+  ]);
+}
+
+function printDeliveryNote(id) {
+  const note = state.deliveryNotes.find((row) => String(row.id) === String(id));
+  if (!note) return;
+  printDocument(`إذن تسليم #${note.id}`, [
+    { type: "meta", rows: [["التاريخ", note.delivery_date || "-"], ["العميل", note.customer_name || "-"]] },
+    { type: "table", title: "الأصناف", headers: ["#", "الصنف", "التصميم", "المقاس", "العدد", "ملاحظة"], rows: (note.items || []).map((item) => [item.line_no, item.product_type, item.design_name || "-", item.size_name || "-", `${money(item.quantity_amount)} ${item.quantity_unit || ""}`, item.note || "-"]) },
+  ]);
+}
+
+function printInvoice(id) {
+  const invoice = state.invoices.find((row) => String(row.id) === String(id));
+  if (!invoice) return;
+  printDocument(`فاتورة #${invoice.id}`, [
+    { type: "meta", rows: [["التاريخ", invoice.invoice_date || "-"], ["العميل", invoice.customer_name || "-"], ["إذن التسليم", `#${invoice.delivery_note_id}`]] },
+    { type: "table", title: "الأصناف", headers: ["#", "الصنف", "التصميم", "المقاس", "العدد", "أمر التوريد", "السعر", "الإجمالي"], rows: (invoice.items || []).map((item) => [item.line_no, item.product_type, item.design_name || "-", item.size_name || "-", `${money(item.quantity_amount)} ${item.quantity_unit || ""}`, item.supply_order_id ? `#${item.supply_order_id}` : "-", money(item.unit_price), money(item.line_total)]) },
+    { type: "totals", rows: [["إجمالي الأصناف", money(invoice.subtotal)], ["مصاريف النقل", money(invoice.delivery_charge)], ["إجمالي الفاتورة", money(invoice.total)]] },
+  ]);
+}
+
+function printCustomerStatement() {
+  const data = state.customerStatement;
+  if (!data) throw new Error("اعرض كشف الحساب أولا");
+  printDocument(`كشف حساب ${data.customer.name}`, [
+    { type: "totals", rows: [["إجمالي الفواتير", money(data.totals.invoices)], ["إجمالي التحصيلات", money(data.totals.collections)], ["المتبقي للتحصيل", money(data.totals.remaining)]] },
+    { type: "table", title: "الفواتير", headers: ["رقم", "التاريخ", "إذن التسليم", "الإجمالي", "ملاحظة"], rows: data.invoices.map((item) => [`#${item.id}`, item.invoice_date || "-", `#${item.delivery_note_id}`, money(item.total), item.note || "-"]) },
+    { type: "table", title: "التحصيلات", headers: ["رقم", "التاريخ", "المسؤول", "النوع", "المبلغ", "الطريقة"], rows: data.collections.map((item) => [`#${item.id}`, item.entry_date || "-", item.responsible || "-", item.collection_type || "-", money(item.amount), item.payment_method || "-"]) },
+  ]);
 }
 
 async function loadBootstrap() {
@@ -1579,6 +1655,20 @@ function bindEvents() {
     loadCustomerStatement().catch((error) => showToast(error.message, true));
   });
 
+  qs("#exportStatementExcelBtn").addEventListener("click", () => {
+    const customerId = qs("#statementCustomer")?.value;
+    if (!customerId) return showToast("اختر العميل أولا", true);
+    window.location.href = `/api/customer-statement.xlsx?customer_id=${encodeURIComponent(customerId)}`;
+  });
+
+  qs("#exportStatementPdfBtn").addEventListener("click", () => {
+    try {
+      printCustomerStatement();
+    } catch (error) {
+      showToast(error.message, true);
+    }
+  });
+
   qs("#expenseReportType").addEventListener("change", () => {
     fillExpenseReportCodes();
   });
@@ -1713,6 +1803,12 @@ function bindEvents() {
     const deliveryNoteDelete = event.target.closest("[data-delete-delivery-note]");
     const invoiceEdit = event.target.closest("[data-edit-invoice]");
     const invoiceDelete = event.target.closest("[data-delete-invoice]");
+    const supplyOrderXlsx = event.target.closest("[data-xlsx-supply-order]");
+    const supplyOrderPdf = event.target.closest("[data-pdf-supply-order]");
+    const deliveryNoteXlsx = event.target.closest("[data-xlsx-delivery-note]");
+    const deliveryNotePdf = event.target.closest("[data-pdf-delivery-note]");
+    const invoiceXlsx = event.target.closest("[data-xlsx-invoice]");
+    const invoicePdf = event.target.closest("[data-pdf-invoice]");
     if (collectionEdit) editCollection(collectionEdit.dataset.editCollection);
     if (collectionDelete) removeRecord("collections", collectionDelete.dataset.deleteCollection).catch((error) => showToast(error.message, true));
     if (expenseEdit) editExpense(expenseEdit.dataset.editExpense);
@@ -1725,6 +1821,12 @@ function bindEvents() {
     if (deliveryNoteDelete) removeRecord("delivery-notes", deliveryNoteDelete.dataset.deleteDeliveryNote).catch((error) => showToast(error.message, true));
     if (invoiceEdit) editInvoice(invoiceEdit.dataset.editInvoice);
     if (invoiceDelete) removeRecord("invoices", invoiceDelete.dataset.deleteInvoice).catch((error) => showToast(error.message, true));
+    if (supplyOrderXlsx) window.location.href = `/api/supply-orders/${supplyOrderXlsx.dataset.xlsxSupplyOrder}.xlsx`;
+    if (supplyOrderPdf) printSupplyOrder(supplyOrderPdf.dataset.pdfSupplyOrder);
+    if (deliveryNoteXlsx) window.location.href = `/api/delivery-notes/${deliveryNoteXlsx.dataset.xlsxDeliveryNote}.xlsx`;
+    if (deliveryNotePdf) printDeliveryNote(deliveryNotePdf.dataset.pdfDeliveryNote);
+    if (invoiceXlsx) window.location.href = `/api/invoices/${invoiceXlsx.dataset.xlsxInvoice}.xlsx`;
+    if (invoicePdf) printInvoice(invoicePdf.dataset.pdfInvoice);
   });
 }
 

@@ -57,8 +57,10 @@ async function handleApi(request, env, url) {
   if (url.pathname === "/api/customers" && method === "GET") return listCustomers(env);
   if (url.pathname === "/api/customers" && method === "POST") return createCustomer(request, env, user);
   if (url.pathname === "/api/customer-statement" && method === "GET") return customerStatement(env, url);
+  if (url.pathname === "/api/customer-statement.xlsx" && method === "GET") return customerStatementXlsx(env, url);
   if (url.pathname === "/api/supply-orders" && method === "GET") return listSupplyOrders(env);
   if (url.pathname === "/api/supply-orders" && method === "POST") return createSupplyOrder(request, env, user);
+  if (/^\/api\/supply-orders\/\d+\.xlsx$/.test(url.pathname) && method === "GET") return supplyOrderXlsxResponse(env, idFromExportPath(url.pathname));
   if (url.pathname.startsWith("/api/supply-orders/")) {
     const id = idFromPath(url.pathname);
     if (method === "PUT") return updateSupplyOrder(request, env, user, id);
@@ -66,6 +68,7 @@ async function handleApi(request, env, url) {
   }
   if (url.pathname === "/api/delivery-notes" && method === "GET") return listDeliveryNotes(env);
   if (url.pathname === "/api/delivery-notes" && method === "POST") return createDeliveryNote(request, env, user);
+  if (/^\/api\/delivery-notes\/\d+\.xlsx$/.test(url.pathname) && method === "GET") return deliveryNoteXlsxResponse(env, idFromExportPath(url.pathname));
   if (url.pathname.startsWith("/api/delivery-notes/")) {
     const id = idFromPath(url.pathname);
     if (method === "PUT") return updateDeliveryNote(request, env, user, id);
@@ -73,6 +76,7 @@ async function handleApi(request, env, url) {
   }
   if (url.pathname === "/api/invoices" && method === "GET") return listInvoices(env);
   if (url.pathname === "/api/invoices" && method === "POST") return createInvoice(request, env, user);
+  if (/^\/api\/invoices\/\d+\.xlsx$/.test(url.pathname) && method === "GET") return invoiceXlsxResponse(env, idFromExportPath(url.pathname));
   if (url.pathname.startsWith("/api/invoices/")) {
     const id = idFromPath(url.pathname);
     if (method === "PUT") return updateInvoice(request, env, user, id);
@@ -138,6 +142,13 @@ async function readJson(request) {
 
 function idFromPath(pathname) {
   const id = Number(pathname.split("/").pop());
+  if (!Number.isInteger(id) || id <= 0) throw new Error("Invalid record id");
+  return id;
+}
+
+function idFromExportPath(pathname) {
+  const match = pathname.match(/\/(\d+)\.xlsx$/);
+  const id = Number(match?.[1] || 0);
   if (!Number.isInteger(id) || id <= 0) throw new Error("Invalid record id");
   return id;
 }
@@ -587,6 +598,31 @@ async function createCustomer(request, env, user) {
 
 async function customerStatement(env, url) {
   const customerId = Number(url.searchParams.get("customer_id") || 0) || null;
+  return json(await customerStatementData(env, customerId));
+}
+
+async function customerStatementXlsx(env, url) {
+  const customerId = Number(url.searchParams.get("customer_id") || 0) || null;
+  const data = await customerStatementData(env, customerId);
+  const rows = [];
+  const addRow = (values, style = "normal", mergeAcross = 0) => rows.push({ values, style, mergeAcross });
+  addRow(["كشف حساب"], "title", 6);
+  addRow(["العميل", data.customer.name, "إجمالي الفواتير", data.totals.invoices, "إجمالي التحصيلات", data.totals.collections], "meta");
+  addRow(["المتبقي للتحصيل", data.totals.remaining, "", "", "", ""], "total");
+  addRow(["", "", "", "", "", ""], "normal");
+  addRow(["الفواتير"], "section", 6);
+  addRow(["رقم الفاتورة", "التاريخ", "إذن التسليم", "إجمالي الأصناف", "مصاريف النقل", "الإجمالي"], "header");
+  data.invoices.forEach((item) => addRow([item.id, item.invoice_date || "", item.delivery_note_id, item.subtotal || 0, item.delivery_charge || 0, item.total || 0]));
+  addRow(["", "", "", "", "", ""], "normal");
+  addRow(["التحصيلات"], "section", 6);
+  addRow(["رقم", "التاريخ", "المسؤول", "النوع", "الطريقة", "المبلغ"], "header");
+  data.collections.forEach((item) => addRow([item.id, item.entry_date || "", item.responsible || "", item.collection_type || "", item.payment_method || "", item.amount || 0]));
+  const prepared = normalizeSheetRows(rows);
+  const file = reportXlsx(`كشف حساب ${data.customer.name}`, prepared.rows, prepared.merges);
+  return xlsxDownload(file, `customer-statement-${data.customer.id}.xlsx`);
+}
+
+async function customerStatementData(env, customerId) {
   if (!customerId) throw new HttpError("العميل مطلوب", 400);
   const customer = await env.DB.prepare("SELECT id, name FROM customers WHERE id = ? AND active = 1").bind(customerId).first();
   if (!customer) throw new HttpError("العميل غير صحيح", 400);
@@ -604,7 +640,7 @@ async function customerStatement(env, url) {
   ).bind(customerId).all();
   const totalInvoices = invoices.results.reduce((sum, item) => sum + Number(item.total || 0), 0);
   const totalCollections = collections.results.reduce((sum, item) => sum + Number(item.amount || 0), 0);
-  return json({
+  return {
     customer,
     invoices: invoices.results,
     collections: collections.results,
@@ -613,7 +649,7 @@ async function customerStatement(env, url) {
       collections: totalCollections,
       remaining: totalInvoices - totalCollections,
     },
-  });
+  };
 }
 
 async function listSupplyOrders(env) {
@@ -625,6 +661,28 @@ async function listSupplyOrders(env) {
      LIMIT 300`
   ).all();
   return json({ items: result.results });
+}
+
+async function supplyOrderXlsxResponse(env, id) {
+  const item = await env.DB.prepare("SELECT * FROM supply_orders WHERE id = ?").bind(id).first();
+  if (!item) throw new HttpError("Record not found", 404);
+  const sheet = documentSheetRows("أمر توريد", [
+    ["رقم الأمر", item.id],
+    ["التاريخ", item.order_date || ""],
+    ["العميل", item.customer_name || ""],
+    ["التصميم", item.design_name || ""],
+    ["المقاس", item.size_name || ""],
+    ["الخامة", item.material_name || ""],
+    ["الكمية", `${item.quantity_amount || 0} ${item.quantity_unit || ""}`],
+    ["السعر بدون غطاء", item.price_without_cover || 0],
+    ["السعر بالغطاء", item.price_with_cover || 0],
+    ["سعر السريل للون واحد", item.serial_color_price || 0],
+    ["تكلفة النقل", item.delivery_cost_party || ""],
+    ["تاريخ التوريد", item.supply_date || ""],
+    ["ملاحظة", item.note || ""],
+  ]);
+  const file = reportXlsx(`أمر توريد ${id}`, sheet.rows, sheet.merges);
+  return xlsxDownload(file, `supply-order-${id}.xlsx`);
 }
 
 function supplyOrderData(payload) {
@@ -820,6 +878,21 @@ async function listDeliveryNotes(env) {
   return json({ items: result.results.map((note) => ({ ...note, items: byNote.get(note.id) || [] })) });
 }
 
+async function deliveryNoteXlsxResponse(env, id) {
+  const note = await deliveryNoteWithItems(env, id);
+  if (!note) throw new HttpError("Record not found", 404);
+  const rows = [];
+  const addRow = (values, style = "normal", mergeAcross = 0) => rows.push({ values, style, mergeAcross });
+  addRow(["إذن تسليم"], "title", 6);
+  addRow(["رقم الإذن", note.id, "التاريخ", note.delivery_date || "", "العميل", note.customer_name || ""], "meta");
+  addRow(["", "", "", "", "", ""], "normal");
+  addRow(["#", "الصنف", "التصميم", "المقاس", "العدد", "ملاحظة"], "header");
+  note.items.forEach((item) => addRow([item.line_no, item.product_type, item.design_name || "", item.size_name || "", `${item.quantity_amount || 0} ${item.quantity_unit || ""}`, item.note || ""]));
+  const prepared = normalizeSheetRows(rows);
+  const file = reportXlsx(`إذن تسليم ${id}`, prepared.rows, prepared.merges);
+  return xlsxDownload(file, `delivery-note-${id}.xlsx`);
+}
+
 function deliveryNoteData(payload) {
   return {
     delivery_date: parseDateValue(payload.delivery_date) || new Date().toISOString().slice(0, 10),
@@ -961,6 +1034,24 @@ async function listInvoices(env) {
     byInvoice.get(item.invoice_id).push(item);
   });
   return json({ items: result.results.map((invoice) => ({ ...invoice, items: byInvoice.get(invoice.id) || [] })) });
+}
+
+async function invoiceXlsxResponse(env, id) {
+  const invoice = await invoiceWithItems(env, id);
+  if (!invoice) throw new HttpError("Record not found", 404);
+  const rows = [];
+  const addRow = (values, style = "normal", mergeAcross = 0) => rows.push({ values, style, mergeAcross });
+  addRow(["فاتورة"], "title", 8);
+  addRow(["رقم الفاتورة", invoice.id, "التاريخ", invoice.invoice_date || "", "العميل", invoice.customer_name || "", "إذن التسليم", invoice.delivery_note_id], "meta");
+  addRow(["", "", "", "", "", "", "", ""], "normal");
+  addRow(["#", "الصنف", "التصميم", "المقاس", "العدد", "أمر التوريد", "السعر", "الإجمالي"], "header");
+  invoice.items.forEach((item) => addRow([item.line_no, item.product_type, item.design_name || "", item.size_name || "", `${item.quantity_amount || 0} ${item.quantity_unit || ""}`, item.supply_order_id ? `#${item.supply_order_id}` : "", item.unit_price || 0, item.line_total || 0]));
+  addRow(["", "", "", "", "", "", "إجمالي الأصناف", invoice.subtotal || 0], "total");
+  addRow(["", "", "", "", "", "", "مصاريف النقل", invoice.delivery_charge || 0], "total");
+  addRow(["", "", "", "", "", "", "إجمالي الفاتورة", invoice.total || 0], "total");
+  const prepared = normalizeSheetRows(rows);
+  const file = reportXlsx(`فاتورة ${id}`, prepared.rows, prepared.merges);
+  return xlsxDownload(file, `invoice-${id}.xlsx`);
 }
 
 function invoiceData(payload) {
@@ -1350,6 +1441,33 @@ function reportXlsx(title, rows, merges) {
   return zipStore(files);
 }
 
+function xlsxDownload(file, filename) {
+  return new Response(file, {
+    headers: {
+      "content-type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      "content-disposition": `attachment; filename="${filename}"`,
+    },
+  });
+}
+
+function documentSheetRows(title, pairs) {
+  const rows = [];
+  const addRow = (values, style = "normal", mergeAcross = 0) => rows.push({ values, style, mergeAcross });
+  addRow([title], "title", 4);
+  addRow(["البند", "القيمة", "", ""], "header");
+  pairs.forEach(([label, value]) => addRow([label, value, "", ""]));
+  return normalizeSheetRows(rows);
+}
+
+function normalizeSheetRows(sourceRows) {
+  const merges = [];
+  const rows = sourceRows.map((row, index) => {
+    if (row.mergeAcross > 1) merges.push(`A${index + 1}:${columnName(row.mergeAcross)}${index + 1}`);
+    return { values: row.values, style: row.style || "normal" };
+  });
+  return { rows, merges };
+}
+
 function collectionSheetRows(data) {
   const period = `${data.date_from === "0000-01-01" ? "البداية" : data.date_from} - ${data.date_to === "9999-12-31" ? "النهاية" : data.date_to}`;
   const filters = [
@@ -1488,10 +1606,11 @@ function rootRelsXml() {
 }
 
 function workbookXml(sheetName = "تقرير") {
+  const safeSheetName = String(sheetName || "تقرير").replace(/[\[\]\*\?\/\\:]/g, " ").slice(0, 31) || "تقرير";
   return `<?xml version="1.0" encoding="UTF-8"?>
 <workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
   <workbookViews><workbookView xWindow="0" yWindow="0" windowWidth="16384" windowHeight="8192"/></workbookViews>
-  <sheets><sheet name="${xmlEscape(sheetName)}" sheetId="1" r:id="rId1"/></sheets>
+  <sheets><sheet name="${xmlEscape(safeSheetName)}" sheetId="1" r:id="rId1"/></sheets>
 </workbook>`;
 }
 
