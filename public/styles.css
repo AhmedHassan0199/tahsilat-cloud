@@ -481,6 +481,10 @@ td.actions button {
   gap: 14px;
 }
 
+.entry-layout.supply-layout {
+  grid-template-columns: minmax(360px, 520px) minmax(0, 1fr);
+}
+
 .form-panel {
   padding: 14px;
   align-self: start;
@@ -525,6 +529,36 @@ label.check input {
   width: 18px;
   min-height: 18px;
   margin: 0;
+}
+
+.radio-set {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 10px;
+  margin: 0 0 10px;
+}
+
+.radio-set legend {
+  color: #344054;
+  font-size: 13px;
+  padding: 0 4px;
+}
+
+.radio-set label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 4px 0 8px 12px;
+}
+
+.radio-set input[type="radio"] {
+  width: 16px;
+  min-height: 16px;
+  margin: 0;
+}
+
+.radio-set input[type="number"] {
+  margin-top: 4px;
 }
 
 .form-actions {

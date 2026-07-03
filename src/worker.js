@@ -56,6 +56,8 @@ async function handleApi(request, env, url) {
   }
   if (url.pathname === "/api/customers" && method === "GET") return listCustomers(env);
   if (url.pathname === "/api/customers" && method === "POST") return createCustomer(request, env, user);
+  if (url.pathname === "/api/supply-orders" && method === "GET") return listSupplyOrders(env);
+  if (url.pathname === "/api/supply-orders" && method === "POST") return createSupplyOrder(request, env, user);
   if (url.pathname === "/api/payment-methods" && method === "GET") return paymentMethods(env);
   if (url.pathname === "/api/payment-methods" && method === "POST") return createPaymentMethod(request, env, user);
   if (url.pathname === "/api/expense-accounts" && method === "GET") return expenseAccounts(env);
@@ -92,6 +94,7 @@ async function health(env) {
   checks.collections = await env.DB.prepare("SELECT COUNT(*) AS count FROM collections").first();
   checks.customers = await env.DB.prepare("SELECT COUNT(*) AS count FROM customers").first().catch(() => ({ count: "migration_needed" }));
   checks.custody_holders = await env.DB.prepare("SELECT COUNT(*) AS count FROM custody_holders").first().catch(() => ({ count: "migration_needed" }));
+  checks.supply_orders = await env.DB.prepare("SELECT COUNT(*) AS count FROM supply_orders").first().catch(() => ({ count: "migration_needed" }));
   checks.transfers = await env.DB.prepare("SELECT COUNT(*) AS count FROM transfers").first().catch(() => ({ count: "migration_needed" }));
   checks.expense_accounts = await env.DB.prepare("SELECT COUNT(*) AS count FROM expense_accounts").first().catch(() => ({ count: "migration_needed" }));
   checks.payment_methods = await env.DB.prepare("SELECT COUNT(*) AS count FROM payment_methods").first();
@@ -243,12 +246,18 @@ async function bootstrap(env, user) {
   const expenseAccounts = await env.DB.prepare("SELECT id, category, code, name FROM expense_accounts WHERE active = 1 ORDER BY category DESC, CAST(code AS INTEGER)").all().catch(() => ({ results: [] }));
   const customers = await env.DB.prepare("SELECT id, name FROM customers WHERE active = 1 ORDER BY name").all().catch(() => ({ results: [] }));
   const custodyHolders = await env.DB.prepare("SELECT id, name FROM custody_holders WHERE active = 1 ORDER BY name").all().catch(() => ({ results: [] }));
+  const designs = await env.DB.prepare("SELECT id, name FROM designs WHERE active = 1 ORDER BY name").all().catch(() => ({ results: [] }));
+  const productSizes = await env.DB.prepare("SELECT id, name FROM product_sizes WHERE active = 1 ORDER BY name").all().catch(() => ({ results: [] }));
+  const materials = await env.DB.prepare("SELECT id, name FROM materials WHERE active = 1 ORDER BY name").all().catch(() => ({ results: [] }));
   const users = await env.DB.prepare("SELECT id, username, display_name, role, active, created_at FROM users ORDER BY username").all();
   return json({
     payment_methods: paymentMethods.results,
     expense_accounts: expenseAccounts.results,
     customers: customers.results,
     custody_holders: custodyHolders.results,
+    designs: designs.results,
+    product_sizes: productSizes.results,
+    materials: materials.results,
     users: users.results,
     responsibles: RESPONSIBLES,
     collection_types: COLLECTION_TYPES,
@@ -552,6 +561,145 @@ async function createCustomer(request, env, user) {
   const customer = await env.DB.prepare("SELECT id, name FROM customers WHERE normalized_name = ?").bind(normalized).first();
   await insertAudit(env, request, user, "INSERT", "customers", customer?.id || result.meta.last_row_id || null, null, { name, normalized_name: normalized });
   return json({ id: customer?.id || result.meta.last_row_id, name });
+}
+
+async function listSupplyOrders(env) {
+  const result = await env.DB.prepare(
+    `SELECT supply_orders.*, users.display_name AS created_by_name
+     FROM supply_orders
+     LEFT JOIN users ON users.id = supply_orders.created_by
+     ORDER BY COALESCE(order_date, '') DESC, id DESC
+     LIMIT 300`
+  ).all();
+  return json({ items: result.results });
+}
+
+function supplyOrderData(payload) {
+  return {
+    order_date: parseDateValue(payload.order_date) || new Date().toISOString().slice(0, 10),
+    customer_id: Number(payload.customer_id || 0) || null,
+    new_customer_name: normalizeCustomerName(payload.new_customer_name || ""),
+    design_id: Number(payload.design_id || 0) || null,
+    new_design_name: normalizeCustomerName(payload.new_design_name || ""),
+    size_id: Number(payload.size_id || 0) || null,
+    new_size_name: normalizeCustomerName(payload.new_size_name || ""),
+    material_id: Number(payload.material_id || 0) || null,
+    new_material_name: normalizeCustomerName(payload.new_material_name || ""),
+    quantity_unit: ["كيلو", "كرتونه"].includes(payload.quantity_unit) ? payload.quantity_unit : "كيلو",
+    quantity_amount: Number(payload.quantity_amount || 0),
+    price_without_cover: Number(payload.price_without_cover || 0),
+    price_with_cover: Number(payload.price_with_cover || 0),
+    delivery_cost_party: ["المصنع", "العميل"].includes(payload.delivery_cost_party) ? payload.delivery_cost_party : "المصنع",
+    supply_date: parseDateValue(payload.supply_date) || null,
+    print_approval_status: String(payload.print_approval_status || "").trim() || null,
+    cylinder_colors_count: String(payload.cylinder_colors_count || "").trim() || null,
+    delivery_duration: String(payload.delivery_duration || "").trim() || null,
+    payment_method: String(payload.payment_method || "").trim() || null,
+    delivery_place: String(payload.delivery_place || "").trim() || null,
+    policies: String(payload.policies || "").trim() || null,
+    customer_signature: String(payload.customer_signature || "").trim() || null,
+    planning_signature: String(payload.planning_signature || "").trim() || null,
+    chairman_signature: String(payload.chairman_signature || "").trim() || null,
+    note: String(payload.note || "").trim() || null,
+  };
+}
+
+async function createSupplyOrder(request, env, user) {
+  assertCanWrite(user);
+  const data = supplyOrderData(await readJson(request));
+  const customer = await resolveSupplyCustomer(env, request, user, data);
+  const design = await resolveLookup(env, request, user, "designs", data.design_id, data.new_design_name, "اسم التصميم مطلوب");
+  const size = await resolveLookup(env, request, user, "product_sizes", data.size_id, data.new_size_name, "المقاس المطلوب مطلوب");
+  const material = await resolveLookup(env, request, user, "materials", data.material_id, data.new_material_name, "الخامة مطلوبة");
+  if (!Number.isFinite(data.quantity_amount) || data.quantity_amount <= 0) throw new HttpError("الكمية المطلوبة يجب أن تكون أكبر من صفر", 400);
+  if (!Number.isFinite(data.price_without_cover) || data.price_without_cover < 0) throw new HttpError("السعر بدون غطاء غير صحيح", 400);
+  if (!Number.isFinite(data.price_with_cover) || data.price_with_cover < 0) throw new HttpError("السعر بالغطاء غير صحيح", 400);
+  const now = nowIso();
+  const result = await env.DB.prepare(
+    `INSERT INTO supply_orders(order_date, customer_id, customer_name, design_id, design_name, size_id, size_name, material_id, material_name, quantity_unit, quantity_amount, price_without_cover, price_with_cover, delivery_cost_party, supply_date, print_approval_status, cylinder_colors_count, delivery_duration, payment_method, delivery_place, policies, customer_signature, planning_signature, chairman_signature, note, created_by, created_at, updated_at)
+     VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).bind(
+    data.order_date,
+    customer.id,
+    customer.name,
+    design.id,
+    design.name,
+    size.id,
+    size.name,
+    material.id,
+    material.name,
+    data.quantity_unit,
+    data.quantity_amount,
+    data.price_without_cover,
+    data.price_with_cover,
+    data.delivery_cost_party,
+    data.supply_date,
+    data.print_approval_status,
+    data.cylinder_colors_count,
+    data.delivery_duration,
+    data.payment_method,
+    data.delivery_place,
+    data.policies,
+    data.customer_signature,
+    data.planning_signature,
+    data.chairman_signature,
+    data.note,
+    user.id,
+    now,
+    now
+  ).run();
+  await insertAudit(env, request, user, "INSERT", "supply_orders", result.meta.last_row_id, null, {
+    ...data,
+    customer_id: customer.id,
+    customer_name: customer.name,
+    design_id: design.id,
+    design_name: design.name,
+    size_id: size.id,
+    size_name: size.name,
+    material_id: material.id,
+    material_name: material.name,
+  });
+  return json({ id: result.meta.last_row_id });
+}
+
+async function resolveSupplyCustomer(env, request, user, data) {
+  if (data.customer_id) {
+    const customer = await env.DB.prepare("SELECT id, name FROM customers WHERE id = ? AND active = 1").bind(data.customer_id).first();
+    if (!customer) throw new HttpError("العميل غير صحيح", 400);
+    return customer;
+  }
+  const name = data.new_customer_name;
+  if (!name) throw new HttpError("اسم العميل مطلوب", 400);
+  const normalized = normalizedCustomerKey(name);
+  const existing = await env.DB.prepare("SELECT id, name FROM customers WHERE normalized_name = ?").bind(normalized).first();
+  if (existing) throw new HttpError("العميل موجود بالفعل، اختره من القائمة", 400);
+  const now = nowIso();
+  const result = await env.DB.prepare(
+    `INSERT INTO customers(name, normalized_name, active, created_at, updated_at)
+     VALUES(?, ?, 1, ?, ?)`
+  ).bind(name, normalized, now, now).run();
+  await insertAudit(env, request, user, "INSERT", "customers", result.meta.last_row_id, null, { name, normalized_name: normalized, source: "supply_order" });
+  return { id: result.meta.last_row_id, name };
+}
+
+async function resolveLookup(env, request, user, tableName, id, newName, errorMessage) {
+  if (id) {
+    const item = await env.DB.prepare(`SELECT id, name FROM ${tableName} WHERE id = ? AND active = 1`).bind(id).first();
+    if (!item) throw new HttpError(errorMessage, 400);
+    return item;
+  }
+  const name = normalizeCustomerName(newName || "");
+  if (!name) throw new HttpError(errorMessage, 400);
+  const normalized = normalizedCustomerKey(name);
+  const existing = await env.DB.prepare(`SELECT id, name FROM ${tableName} WHERE normalized_name = ?`).bind(normalized).first();
+  if (existing) return existing;
+  const now = nowIso();
+  const result = await env.DB.prepare(
+    `INSERT INTO ${tableName}(name, normalized_name, active, created_at, updated_at)
+     VALUES(?, ?, 1, ?, ?)`
+  ).bind(name, normalized, now, now).run();
+  await insertAudit(env, request, user, "INSERT", tableName, result.meta.last_row_id, null, { name, normalized_name: normalized, source: "supply_order" });
+  return { id: result.meta.last_row_id, name };
 }
 
 async function createCollection(request, env, user) {
@@ -1176,7 +1324,7 @@ async function auditLog(env, user) {
 async function backup(env, user) {
   if (user.role !== "admin") throw new HttpError("Admins only", 403);
   const tables = {};
-  for (const table of ["users", "payment_methods", "expense_accounts", "customers", "custody_holders", "collections", "expenses", "transfers", "audit_logs"]) {
+  for (const table of ["users", "payment_methods", "expense_accounts", "customers", "custody_holders", "designs", "product_sizes", "materials", "collections", "expenses", "transfers", "supply_orders", "audit_logs"]) {
     const result = await env.DB.prepare(`SELECT * FROM ${table} ORDER BY id`).all();
     tables[table] = result.results.map((row) => {
       if (table !== "users") return row;

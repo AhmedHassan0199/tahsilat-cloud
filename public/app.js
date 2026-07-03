@@ -4,11 +4,15 @@ const state = {
   collectionTypes: [],
   customers: [],
   custodyHolders: [],
+  designs: [],
+  productSizes: [],
+  materials: [],
   responsibles: [],
   dashboard: null,
   collections: [],
   expenses: [],
   transfers: [],
+  supplyOrders: [],
   audit: [],
   users: [],
   expenseReport: null,
@@ -111,6 +115,44 @@ function fillCustomerSelect(select, current = "") {
   if (current) select.value = current;
 }
 
+function fillSupplyCustomerSelect(select, current = "") {
+  select.innerHTML = "";
+  const placeholder = document.createElement("option");
+  placeholder.value = "";
+  placeholder.textContent = "اختر العميل";
+  select.appendChild(placeholder);
+  state.customers.forEach((customer) => {
+    const option = document.createElement("option");
+    option.value = customer.id;
+    option.textContent = customer.name;
+    select.appendChild(option);
+  });
+  const newOption = document.createElement("option");
+  newOption.value = "__new";
+  newOption.textContent = "عميل جديد";
+  select.appendChild(newOption);
+  if (current) select.value = current;
+}
+
+function fillLookupSelect(select, values, placeholderText, newText, current = "") {
+  select.innerHTML = "";
+  const placeholder = document.createElement("option");
+  placeholder.value = "";
+  placeholder.textContent = placeholderText;
+  select.appendChild(placeholder);
+  values.forEach((item) => {
+    const option = document.createElement("option");
+    option.value = item.id;
+    option.textContent = item.name;
+    select.appendChild(option);
+  });
+  const newOption = document.createElement("option");
+  newOption.value = "__new";
+  newOption.textContent = newText;
+  select.appendChild(newOption);
+  if (current) select.value = current;
+}
+
 function fillCustodyDatalist() {
   const list = qs("#custodyHolderOptions");
   if (!list) return;
@@ -195,6 +237,32 @@ function toggleTransferCustody() {
   form.target_custody_holder.required = targetCustody;
   if (!sourceCustody) form.source_custody_holder.value = "";
   if (!targetCustody) form.target_custody_holder.value = "";
+}
+
+function toggleSupplyNewFields() {
+  const form = qs("#supplyOrderForm");
+  if (!form) return;
+  [
+    ["customer_id", "new_customer_name", "#newSupplyCustomerWrap"],
+    ["design_id", "new_design_name", "#newSupplyDesignWrap"],
+    ["size_id", "new_size_name", "#newSupplySizeWrap"],
+    ["material_id", "new_material_name", "#newSupplyMaterialWrap"],
+  ].forEach(([selectName, inputName, wrapperSelector]) => {
+    const isNew = form.elements[selectName].value === "__new";
+    qs(wrapperSelector).classList.toggle("hidden", !isNew);
+    form.elements[inputName].required = isNew;
+    if (!isNew) form.elements[inputName].value = "";
+  });
+}
+
+function fillSupplyOrderFormLookups() {
+  const form = qs("#supplyOrderForm");
+  if (!form) return;
+  fillSupplyCustomerSelect(form.customer_id, form.customer_id.value);
+  fillLookupSelect(form.design_id, state.designs, "اختر التصميم", "تصميم جديد", form.design_id.value);
+  fillLookupSelect(form.size_id, state.productSizes, "اختر المقاس", "مقاس جديد", form.size_id.value);
+  fillLookupSelect(form.material_id, state.materials, "اختر الخامة", "خامة جديدة", form.material_id.value);
+  toggleSupplyNewFields();
 }
 
 function addMonthOptions() {
@@ -446,6 +514,25 @@ function renderTransfers() {
   `).join("") || `<tr><td colspan="7" class="muted">لا توجد عمليات توسيط</td></tr>`;
 }
 
+function renderSupplyOrders() {
+  const body = qs("#supplyOrderRows");
+  if (!body) return;
+  body.innerHTML = state.supplyOrders.map((item) => `
+    <tr>
+      <td data-label="رقم">${item.id}</td>
+      <td data-label="التاريخ">${item.order_date || "-"}</td>
+      <td data-label="العميل">${item.customer_name || "-"}</td>
+      <td data-label="التصميم">${item.design_name || "-"}</td>
+      <td data-label="المقاس">${item.size_name || "-"}</td>
+      <td data-label="الخامة">${item.material_name || "-"}</td>
+      <td data-label="الكمية">${money(item.quantity_amount)} ${item.quantity_unit || ""}</td>
+      <td data-label="السعر">${money(item.price_without_cover)} / ${money(item.price_with_cover)}</td>
+      <td data-label="تاريخ التوريد">${item.supply_date || "-"}</td>
+      <td data-label="المستخدم">${item.created_by_name || "-"}</td>
+    </tr>
+  `).join("") || `<tr><td colspan="10" class="muted">لا توجد أوامر توريد مسجلة</td></tr>`;
+}
+
 function renderUsers() {
   const body = qs("#userRows");
   if (!body) return;
@@ -536,6 +623,9 @@ async function loadBootstrap() {
   state.expenseAccounts = data.expense_accounts || [];
   state.customers = data.customers || [];
   state.custodyHolders = data.custody_holders || [];
+  state.designs = data.designs || [];
+  state.productSizes = data.product_sizes || [];
+  state.materials = data.materials || [];
   state.collectionTypes = data.collection_types || [];
   state.responsibles = data.responsibles;
   state.user = data.user;
@@ -550,6 +640,7 @@ async function loadBootstrap() {
   qsa('select[name="payment_method"]').forEach((select) => fillSelect(select, state.paymentMethods));
   qsa('select[name="expense_account_id"]').forEach((select) => fillExpenseAccountSelect(select, select.value));
   fillExpenseReportCodes();
+  fillSupplyOrderFormLookups();
   qsa('select[name="source_method"]').forEach((select) => fillSelect(select, state.paymentMethods));
   qsa('select[name="target_method"]').forEach((select) => fillSelect(select, state.paymentMethods));
   fillCustodyDatalist();
@@ -574,6 +665,7 @@ async function loadCustomers() {
   state.customers = data.items;
   renderCustomers();
   qsa('select[name="customer_id"]').forEach((select) => fillCustomerSelect(select, select.value));
+  fillSupplyOrderFormLookups();
 }
 
 async function loadExpenses() {
@@ -597,6 +689,12 @@ async function loadTransfers() {
   const data = await api("/api/transfers");
   state.transfers = data.items;
   renderTransfers();
+}
+
+async function loadSupplyOrders() {
+  const data = await api("/api/supply-orders");
+  state.supplyOrders = data.items;
+  renderSupplyOrders();
 }
 
 async function loadUsers() {
@@ -658,7 +756,7 @@ async function loadResponsibleMonthly() {
 
 async function reloadAll() {
   await loadBootstrap();
-  await Promise.all([loadDashboard(), loadCollections(), loadCustomers(), loadExpenses(), loadTransfers(), loadUsers(), loadAudit(), loadExpenseReport(), loadCollectionReport(), loadResponsibleMonthly()]);
+  await Promise.all([loadDashboard(), loadCollections(), loadCustomers(), loadExpenses(), loadTransfers(), loadSupplyOrders(), loadUsers(), loadAudit(), loadExpenseReport(), loadCollectionReport(), loadResponsibleMonthly()]);
 }
 
 function formData(form) {
@@ -690,6 +788,17 @@ function resetExpenseForm() {
   qs("#expenseFormTitle").textContent = "إضافة مصروف";
   fillSelect(form.payment_method, state.paymentMethods);
   fillExpenseAccountSelect(form.expense_account_id);
+}
+
+function resetSupplyOrderForm() {
+  const form = qs("#supplyOrderForm");
+  if (!form) return;
+  form.reset();
+  form.price_without_cover.value = "0";
+  form.price_with_cover.value = "0";
+  form.quantity_unit.value = "كيلو";
+  form.delivery_cost_party.value = "المصنع";
+  fillSupplyOrderFormLookups();
 }
 
 async function saveCollection(event) {
@@ -750,6 +859,19 @@ async function saveTransfer(event) {
   }
   resetTransferForm();
   await Promise.all([loadBootstrap(), loadDashboard(), loadTransfers(), loadAudit()]);
+}
+
+async function saveSupplyOrder(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const data = formData(form);
+  ["customer_id", "design_id", "size_id", "material_id"].forEach((key) => {
+    if (data[key] === "__new") data[key] = "";
+  });
+  await api("/api/supply-orders", { method: "POST", body: JSON.stringify(data) });
+  resetSupplyOrderForm();
+  showToast("تم حفظ أمر التوريد");
+  await Promise.all([loadBootstrap(), loadSupplyOrders(), loadCustomers(), loadAudit()]);
 }
 
 async function saveUser(event) {
@@ -927,6 +1049,7 @@ function bindEvents() {
 
   qs("#collectionForm").addEventListener("submit", (event) => saveCollection(event).catch((error) => showToast(error.message, true)));
   qs("#customerForm").addEventListener("submit", (event) => saveCustomer(event).catch((error) => showToast(error.message, true)));
+  qs("#supplyOrderForm").addEventListener("submit", (event) => saveSupplyOrder(event).catch((error) => showToast(error.message, true)));
   qs("#expenseForm").addEventListener("submit", (event) => saveExpense(event).catch((error) => showToast(error.message, true)));
   qs("#transferForm").addEventListener("submit", (event) => saveTransfer(event).catch((error) => showToast(error.message, true)));
   qs("#userForm").addEventListener("submit", (event) => saveUser(event).catch((error) => showToast(error.message, true)));
@@ -955,6 +1078,9 @@ function bindEvents() {
   qs("#expenseMonth").addEventListener("change", loadExpenses);
   qs('#transferForm select[name="source_method"]').addEventListener("change", toggleTransferCustody);
   qs('#transferForm select[name="target_method"]').addEventListener("change", toggleTransferCustody);
+  qsa('#supplyOrderForm select').forEach((select) => {
+    select.addEventListener("change", toggleSupplyNewFields);
+  });
 
   document.addEventListener("click", (event) => {
     const collectionEdit = event.target.closest("[data-edit-collection]");
@@ -987,6 +1113,7 @@ async function init() {
     await reloadAll();
     resetCollectionForm();
     resetExpenseForm();
+    resetSupplyOrderForm();
     showApp();
     showToast("النظام جاهز");
   } catch (error) {
