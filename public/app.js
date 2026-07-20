@@ -36,6 +36,111 @@ function qsa(selector, root = document) {
   return Array.from(root.querySelectorAll(selector));
 }
 
+const searchableSelects = new WeakMap();
+
+function normalizeFilterText(value) {
+  return String(value || "")
+    .normalize("NFD")
+    .replace(/[\u064b-\u065f\u0670]/g, "")
+    .replace(/[أإآ]/g, "ا")
+    .replace(/ى/g, "ي")
+    .replace(/ة/g, "ه")
+    .toLowerCase()
+    .trim();
+}
+
+function optionMatches(option, query, selectedValues) {
+  return !query
+    || !option.value
+    || selectedValues.has(String(option.value))
+    || normalizeFilterText(option.textContent).includes(query);
+}
+
+function applySelectFilter(select) {
+  const control = searchableSelects.get(select);
+  if (!control) return;
+  const query = normalizeFilterText(control.input.value);
+  const selectedValues = new Set(qsa("option:checked", select).map((option) => String(option.value)));
+  const fragment = document.createDocumentFragment();
+
+  control.options.forEach((source) => {
+    if (source.tagName === "OPTGROUP") {
+      const groupMatches = normalizeFilterText(source.label).includes(query);
+      const group = source.cloneNode(false);
+      qsa("option", source).forEach((sourceOption) => {
+        if (groupMatches || optionMatches(sourceOption, query, selectedValues)) {
+          const option = sourceOption.cloneNode(true);
+          option.selected = selectedValues.has(String(option.value));
+          group.appendChild(option);
+        }
+      });
+      if (group.children.length) fragment.appendChild(group);
+      return;
+    }
+    if (optionMatches(source, query, selectedValues)) {
+      const option = source.cloneNode(true);
+      option.selected = selectedValues.has(String(option.value));
+      fragment.appendChild(option);
+    }
+  });
+
+  select.replaceChildren(fragment);
+  control.empty.classList.toggle("hidden", select.options.length > 0);
+}
+
+function refreshSearchableSelect(select, clearQuery = true) {
+  const control = searchableSelects.get(select);
+  if (!control) return;
+  control.options = Array.from(select.children, (child) => child.cloneNode(true));
+  if (clearQuery) control.input.value = "";
+  applySelectFilter(select);
+}
+
+function enhanceSearchableSelect(select) {
+  if (!select || searchableSelects.has(select)) return;
+  const wrapper = document.createElement("div");
+  wrapper.className = `searchable-select${select.multiple ? " searchable-select-multiple" : ""}`;
+  const input = document.createElement("input");
+  input.type = "search";
+  input.className = "select-search-input";
+  input.placeholder = select.multiple ? "اكتب لتصفية الخيارات" : "اكتب جزءًا من اسم الاختيار";
+  input.autocomplete = "off";
+  input.setAttribute("aria-label", `بحث في ${select.closest("label")?.childNodes[0]?.textContent?.trim() || "الاختيارات"}`);
+  const empty = document.createElement("span");
+  empty.className = "select-search-empty hidden";
+  empty.textContent = "لا توجد اختيارات مطابقة";
+  select.parentNode.insertBefore(wrapper, select);
+  wrapper.append(input, select, empty);
+  searchableSelects.set(select, {
+    input,
+    empty,
+    options: Array.from(select.children, (child) => child.cloneNode(true)),
+  });
+  input.addEventListener("input", () => applySelectFilter(select));
+  select.addEventListener("change", () => {
+    const control = searchableSelects.get(select);
+    if (!control || !control.input.value) return;
+    control.input.value = "";
+    applySelectFilter(select);
+  });
+}
+
+function enhanceSearchableSelects(root = document) {
+  const selects = root.matches?.("select") ? [root] : qsa("select", root);
+  selects.forEach(enhanceSearchableSelect);
+}
+
+document.addEventListener("reset", (event) => {
+  setTimeout(() => {
+    qsa("select", event.target).forEach((select) => {
+      const control = searchableSelects.get(select);
+      if (!control) return;
+      control.input.value = "";
+      applySelectFilter(select);
+    });
+  });
+});
+
 function money(value) {
   return nf.format(Number(value || 0));
 }
@@ -103,6 +208,7 @@ function fillSelect(select, values, current = "") {
     select.appendChild(option);
   });
   if (current) select.value = current;
+  refreshSearchableSelect(select);
 }
 
 function fillCustomerSelect(select, current = "") {
@@ -118,6 +224,7 @@ function fillCustomerSelect(select, current = "") {
     select.appendChild(option);
   });
   if (current) select.value = current;
+  refreshSearchableSelect(select);
 }
 
 function fillSupplyCustomerSelect(select, current = "") {
@@ -137,6 +244,7 @@ function fillSupplyCustomerSelect(select, current = "") {
   newOption.textContent = "عميل جديد";
   select.appendChild(newOption);
   if (current) select.value = current;
+  refreshSearchableSelect(select);
 }
 
 function fillLookupSelect(select, values, placeholderText, newText, current = "") {
@@ -156,6 +264,7 @@ function fillLookupSelect(select, values, placeholderText, newText, current = ""
   newOption.textContent = newText;
   select.appendChild(newOption);
   if (current) select.value = current;
+  refreshSearchableSelect(select);
 }
 
 function fillExistingLookupSelect(select, values, placeholderText, current = "") {
@@ -171,6 +280,7 @@ function fillExistingLookupSelect(select, values, placeholderText, current = "")
     select.appendChild(option);
   });
   if (current) select.value = current;
+  refreshSearchableSelect(select);
 }
 
 function fillCustodyDatalist() {
@@ -213,6 +323,7 @@ function fillExpenseAccountSelect(select, current = "") {
     select.appendChild(group);
   });
   if (current) select.value = current;
+  refreshSearchableSelect(select);
 }
 
 function fillExpenseReportCodes() {
@@ -229,6 +340,7 @@ function fillExpenseReportCodes() {
     option.selected = selected.has(item.code);
     select.appendChild(option);
   });
+  refreshSearchableSelect(select);
 }
 
 function toggleCollectionOtherType() {
@@ -383,6 +495,7 @@ function fillInvoiceDeliverySelect() {
     select.appendChild(option);
   });
   if (current) select.value = current;
+  refreshSearchableSelect(select);
 }
 
 function matchingSupplyOrders(note, item) {
@@ -500,6 +613,7 @@ function renderInvoiceEditor() {
       </div>
     `;
   }).join("");
+  enhanceSearchableSelects(host);
   qs("#invoiceDeliveryChargeWrap").classList.toggle("hidden", !invoiceNeedsDeliveryCharge());
 }
 
@@ -693,14 +807,18 @@ function renderCollections() {
 function renderCustomers() {
   const body = qs("#customerRows");
   if (!body) return;
-  body.innerHTML = state.customers.map((item) => `
+  const query = normalizeFilterText(qs("#customerSearch")?.value);
+  const customers = state.customers.filter((item) => !query || normalizeFilterText(item.name).includes(query));
+  const count = qs("#customerCount");
+  if (count) count.textContent = query ? `${customers.length} من ${state.customers.length}` : state.customers.length;
+  body.innerHTML = customers.map((item) => `
     <tr>
-      <td data-label="العميل">${item.name}</td>
+      <td data-label="العميل">${escapeHtml(item.name)}</td>
       <td data-label="إجمالي التحصيل">${money(item.total_collections)}</td>
       <td data-label="عدد التحصيلات">${money(item.collection_count)}</td>
-      <td data-label="آخر تحصيل">${item.last_collection_date || "-"}</td>
+      <td data-label="آخر تحصيل">${escapeHtml(item.last_collection_date || "-")}</td>
     </tr>
-  `).join("") || `<tr><td colspan="4" class="muted">لا توجد بيانات عملاء</td></tr>`;
+  `).join("") || `<tr><td colspan="4" class="muted">${query ? "لا يوجد عميل مطابق للبحث" : "لا توجد بيانات عملاء"}</td></tr>`;
 }
 
 function renderExpenses() {
@@ -1753,6 +1871,7 @@ function bindEvents() {
   });
 
   qs("#collectionSearch").addEventListener("input", debounce(loadCollections, 250));
+  qs("#customerSearch").addEventListener("input", renderCustomers);
   qs("#collectionMonth").addEventListener("change", loadCollections);
   qs('#collectionForm select[name="collection_type"]').addEventListener("change", toggleCollectionOtherType);
   qs('#collectionForm select[name="payment_method"]').addEventListener("change", toggleCollectionCustody);
@@ -1840,6 +1959,7 @@ function debounce(fn, delay) {
 
 async function init() {
   addMonthOptions();
+  enhanceSearchableSelects();
   bindEvents();
   try {
     await reloadAll();

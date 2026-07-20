@@ -156,12 +156,19 @@
       <section id="customers" class="tab-panel">
         <div class="entry-layout">
           <form id="customerForm" class="form-panel">
-            <h2>إضافة عميل</h2>
+            <h2>إضافة عميل جديد</h2>
+            <p class="muted section-note">أضف العميل مرة واحدة ليظهر في جميع التحصيلات وأوامر التوريد وأذونات التسليم والتقارير.</p>
             <label>اسم العميل<input name="name" required autocomplete="off"></label>
             <div class="form-actions"><button type="submit">إضافة</button></div>
           </form>
           <div class="panel">
-            <div class="panel-head"><h2>العملاء الأكثر تحصيلًا</h2></div>
+            <div class="panel-head customer-directory-head">
+              <div>
+                <h2>دليل العملاء الحاليين</h2>
+                <p class="muted"><span id="customerCount">0</span> عميل</p>
+              </div>
+              <input id="customerSearch" type="search" placeholder="ابحث بجزء من اسم العميل" autocomplete="off">
+            </div>
             <div class="table-wrap records">
               <table>
                 <thead><tr><th>العميل</th><th>إجمالي التحصيل</th><th>عدد التحصيلات</th><th>آخر تحصيل</th></tr></thead>

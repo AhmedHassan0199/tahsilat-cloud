@@ -516,6 +516,55 @@ input, select, textarea {
   margin-top: 5px;
 }
 
+.searchable-select {
+  display: grid;
+  gap: 5px;
+  width: 100%;
+  margin-top: 5px;
+}
+
+.searchable-select input,
+.searchable-select select {
+  margin-top: 0;
+}
+
+.select-search-input {
+  min-height: 34px;
+  border-color: #b8c9dc;
+  background: #f8fbff;
+  font-size: 12px;
+}
+
+.select-search-input:focus {
+  background: #fff;
+  border-color: var(--primary);
+  outline: 2px solid rgba(18, 103, 174, .12);
+}
+
+.select-search-empty {
+  color: #b42318;
+  font-size: 12px;
+}
+
+.section-note {
+  line-height: 1.7;
+  margin: -4px 0 14px;
+}
+
+.customer-directory-head {
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.customer-directory-head > div p {
+  margin-top: 4px;
+}
+
+.customer-directory-head > input {
+  width: min(360px, 100%);
+  margin: 0;
+}
+
 textarea { resize: vertical; }
 
 label.check {
@@ -658,6 +707,17 @@ label.check input {
 .filters select {
   margin: 0;
   min-width: 180px;
+}
+
+.filters .searchable-select {
+  flex: 1 1 220px;
+  min-width: 180px;
+  margin: 0;
+}
+
+.filters .searchable-select input,
+.filters .searchable-select select {
+  min-width: 0;
 }
 
 .filters select[multiple] {
