@@ -481,6 +481,10 @@ td.actions button {
   gap: 14px;
 }
 
+.entry-layout.read-only-layout {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 .entry-layout.supply-layout {
   grid-template-columns: minmax(360px, 520px) minmax(0, 1fr);
 }

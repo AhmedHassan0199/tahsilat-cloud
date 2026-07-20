@@ -32,6 +32,7 @@ async function handleApi(request, env, url) {
   const method = request.method.toUpperCase();
   const publicRoutes = new Set(["/api/login", "/api/login-page", "/api/health"]);
   const user = publicRoutes.has(url.pathname) ? null : await requireUser(request, env);
+  if (user) authorizeApiRequest(user, url.pathname, method);
 
   if (url.pathname === "/api/health" && method === "GET") return health(env);
   if (url.pathname === "/api/login" && method === "POST") return login(request, env);
@@ -102,6 +103,23 @@ async function handleApi(request, env, url) {
   if (url.pathname === "/api/users" && method === "GET") return users(env, user);
   if (url.pathname === "/api/users" && method === "POST") return createUser(request, env, user);
   return json({ error: "Not found" }, 404);
+}
+
+function effectiveRole(user) {
+  return user?.role === "user" ? "collector" : user?.role;
+}
+
+function authorizeApiRequest(user, pathname, method) {
+  const role = effectiveRole(user);
+  if (role === "admin") return;
+  if (pathname === "/api/logout" && method === "POST") return;
+  if (role === "viewer" && method === "GET") return;
+  if (role === "collector") {
+    const canRead = method === "GET" && ["/api/me", "/api/bootstrap", "/api/collections"].includes(pathname);
+    const canInsertCollection = method === "POST" && pathname === "/api/collections";
+    if (canRead || canInsertCollection) return;
+  }
+  throw new HttpError("ليس لديك صلاحية للوصول إلى هذه العملية", 403);
 }
 
 function redirect(location, headers = {}) {
@@ -275,14 +293,15 @@ function publicUser(user) {
 }
 
 async function bootstrap(env, user) {
+  const collector = effectiveRole(user) === "collector";
   const paymentMethods = await env.DB.prepare("SELECT id, name, note FROM payment_methods WHERE active = 1 ORDER BY name").all();
-  const expenseAccounts = await env.DB.prepare("SELECT id, category, code, name FROM expense_accounts WHERE active = 1 ORDER BY category DESC, CAST(code AS INTEGER)").all().catch(() => ({ results: [] }));
+  const expenseAccounts = collector ? { results: [] } : await env.DB.prepare("SELECT id, category, code, name FROM expense_accounts WHERE active = 1 ORDER BY category DESC, CAST(code AS INTEGER)").all().catch(() => ({ results: [] }));
   const customers = await env.DB.prepare("SELECT id, name FROM customers WHERE active = 1 ORDER BY name").all().catch(() => ({ results: [] }));
   const custodyHolders = await env.DB.prepare("SELECT id, name FROM custody_holders WHERE active = 1 ORDER BY name").all().catch(() => ({ results: [] }));
-  const designs = await env.DB.prepare("SELECT id, name FROM designs WHERE active = 1 ORDER BY name").all().catch(() => ({ results: [] }));
-  const productSizes = await env.DB.prepare("SELECT id, name FROM product_sizes WHERE active = 1 ORDER BY name").all().catch(() => ({ results: [] }));
-  const materials = await env.DB.prepare("SELECT id, name FROM materials WHERE active = 1 ORDER BY name").all().catch(() => ({ results: [] }));
-  const users = await env.DB.prepare("SELECT id, username, display_name, role, active, created_at FROM users ORDER BY username").all();
+  const designs = collector ? { results: [] } : await env.DB.prepare("SELECT id, name FROM designs WHERE active = 1 ORDER BY name").all().catch(() => ({ results: [] }));
+  const productSizes = collector ? { results: [] } : await env.DB.prepare("SELECT id, name FROM product_sizes WHERE active = 1 ORDER BY name").all().catch(() => ({ results: [] }));
+  const materials = collector ? { results: [] } : await env.DB.prepare("SELECT id, name FROM materials WHERE active = 1 ORDER BY name").all().catch(() => ({ results: [] }));
+  const users = collector ? { results: [] } : await env.DB.prepare("SELECT id, username, display_name, role, active, created_at FROM users ORDER BY username").all();
   return json({
     payment_methods: paymentMethods.results,
     expense_accounts: expenseAccounts.results,
@@ -1195,7 +1214,7 @@ async function deleteInvoice(env, user, id) {
 }
 
 async function createCollection(request, env, user) {
-  assertCanWrite(user);
+  assertCanWrite(user, { allowCollector: true });
   const data = await applyCollectionCustody(env, await applyCustomer(env, collectionData(await readJson(request))));
   validateCollection(data);
   const now = nowIso();
@@ -1836,13 +1855,13 @@ async function updateTransfer(request, env, user, id) {
 }
 
 async function auditLog(env, user) {
-  if (user.role !== "admin") throw new HttpError("Admins only", 403);
+  if (!["admin", "viewer"].includes(effectiveRole(user))) throw new HttpError("Admins and viewers only", 403);
   const result = await env.DB.prepare("SELECT * FROM audit_logs ORDER BY id DESC LIMIT 300").all();
   return json({ items: result.results });
 }
 
 async function backup(env, user) {
-  if (user.role !== "admin") throw new HttpError("Admins only", 403);
+  if (!["admin", "viewer"].includes(effectiveRole(user))) throw new HttpError("Admins and viewers only", 403);
   const tables = {};
   for (const table of ["users", "payment_methods", "expense_accounts", "customers", "custody_holders", "designs", "product_sizes", "materials", "collections", "expenses", "transfers", "supply_orders", "delivery_notes", "delivery_note_items", "invoices", "invoice_items", "audit_logs"]) {
     const result = await env.DB.prepare(`SELECT * FROM ${table} ORDER BY id`).all();
@@ -1862,7 +1881,7 @@ async function backup(env, user) {
 }
 
 async function users(env, user) {
-  if (user.role !== "admin") throw new HttpError("Admins only", 403);
+  if (!["admin", "viewer"].includes(effectiveRole(user))) throw new HttpError("Admins and viewers only", 403);
   const result = await env.DB.prepare("SELECT id, username, display_name, role, active, created_at FROM users ORDER BY username").all();
   return json({ items: result.results });
 }
@@ -1872,7 +1891,7 @@ async function createUser(request, env, user) {
   const payload = await readJson(request);
   const username = String(payload.username || "").trim().toLowerCase();
   const displayName = String(payload.display_name || username).trim();
-  const role = ["admin", "user", "viewer"].includes(payload.role) ? payload.role : "user";
+  const role = ["admin", "collector", "viewer"].includes(payload.role) ? payload.role : "collector";
   const password = String(payload.password || "");
   if (!username || password.length < 8) throw new HttpError("اسم المستخدم مطلوب وكلمة المرور 8 أحرف على الأقل", 400);
   const hash = await hashPassword(password);
@@ -1883,8 +1902,9 @@ async function createUser(request, env, user) {
   return json({ id: result.meta.last_row_id });
 }
 
-function assertCanWrite(user) {
-  if (!user || !["admin", "user"].includes(user.role)) {
+function assertCanWrite(user, { allowCollector = false } = {}) {
+  const role = effectiveRole(user);
+  if (role !== "admin" && !(allowCollector && role === "collector")) {
     throw new HttpError("ليس لديك صلاحية للتعديل", 403);
   }
 }

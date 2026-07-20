@@ -37,7 +37,7 @@
   </header>
 
   <main>
-    <section class="metrics" aria-label="المؤشرات الرئيسية">
+    <section id="mainMetrics" class="metrics" aria-label="المؤشرات الرئيسية">
       <div class="metric">
         <span>إجمالي التحصيل</span>
         <strong id="totalCollections">0</strong>
@@ -69,7 +69,7 @@
         <button class="tab" data-tab="treasury" type="button">الخزينة</button>
         <button class="tab" data-tab="transfers" type="button">توسيط</button>
         <button class="tab" data-tab="reports" type="button">التقارير</button>
-        <button class="tab admin-only" data-tab="users" type="button">المستخدمين</button>
+        <button class="tab" data-tab="users" type="button">المستخدمين</button>
         <button class="tab" data-tab="audit" type="button">السجل</button>
       </nav>
 
@@ -500,12 +500,12 @@
 
       <section id="users" class="tab-panel">
         <div class="entry-layout">
-          <form id="userForm" class="form-panel">
+          <form id="userForm" class="form-panel admin-only">
             <h2>إنشاء مستخدم</h2>
             <label>اسم المستخدم<input name="username" required autocomplete="off"></label>
             <label>الاسم الكامل<input name="display_name" required autocomplete="off"></label>
             <label>كلمة المرور<input name="password" type="password" minlength="8" required></label>
-            <label>الصلاحية<select name="role"><option value="user">user</option><option value="admin">admin</option><option value="viewer">viewer</option></select></label>
+            <label>الصلاحية<select name="role"><option value="collector">محصل</option><option value="admin">admin</option><option value="viewer">viewer</option></select></label>
             <div class="form-actions"><button type="submit">إضافة مستخدم</button></div>
           </form>
           <div class="panel">

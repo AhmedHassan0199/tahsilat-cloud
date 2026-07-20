@@ -199,6 +199,56 @@ function setActiveTab(name) {
   qsa(".tab-panel").forEach((item) => item.classList.toggle("active", item.id === name));
 }
 
+function effectiveRole() {
+  return state.user?.role === "user" ? "collector" : state.user?.role;
+}
+
+function isAdmin() {
+  return effectiveRole() === "admin";
+}
+
+function isViewer() {
+  return effectiveRole() === "viewer";
+}
+
+function isCollector() {
+  return effectiveRole() === "collector";
+}
+
+function displayRole(role) {
+  return (role === "collector" || role === "user") ? "محصل" : role || "";
+}
+
+function roleLabel() {
+  return displayRole(effectiveRole());
+}
+
+function applyRolePermissions() {
+  const collector = isCollector();
+  qsa(".tab").forEach((tab) => tab.classList.toggle("hidden", collector && tab.dataset.tab !== "collections"));
+  qsa(".admin-only").forEach((item) => item.classList.toggle("hidden", !isAdmin()));
+  qs("#mainMetrics")?.classList.toggle("hidden", collector);
+  qs("#backupBtn")?.classList.toggle("hidden", collector);
+
+  const forms = ["collectionForm", "customerForm", "supplyOrderForm", "deliveryNoteForm", "invoiceForm", "expenseForm", "methodForm", "transferForm", "userForm"];
+  forms.forEach((id) => {
+    const allowed = isAdmin() || (collector && id === "collectionForm");
+    qs(`#${id}`)?.classList.toggle("hidden", !allowed);
+  });
+  qsa(".entry-layout").forEach((layout) => layout.classList.toggle("read-only-layout", isViewer()));
+
+  if (collector) setActiveTab("collections");
+  else if (qs(".tab.active.hidden")) setActiveTab("dashboard");
+}
+
+function adminRecordActions(editAttribute, deleteAttribute, id) {
+  if (!isAdmin()) return "";
+  return `
+    <button type="button" ${editAttribute}="${id}" title="تعديل">✎</button>
+    <button class="danger" type="button" ${deleteAttribute}="${id}" title="حذف">×</button>
+  `;
+}
+
 function fillSelect(select, values, current = "") {
   select.innerHTML = "";
   values.forEach((value) => {
@@ -796,10 +846,7 @@ function renderCollections() {
       <td data-label="نوع التحصيل">${item.collection_type || "-"}</td>
       <td data-label="المبلغ">${money(item.amount)}</td>
       <td data-label="الطريقة">${item.payment_method}</td>
-      <td class="actions">
-        <button type="button" data-edit-collection="${item.id}" title="تعديل">✎</button>
-        <button class="danger" type="button" data-delete-collection="${item.id}" title="حذف">×</button>
-      </td>
+      <td class="actions">${adminRecordActions("data-edit-collection", "data-delete-collection", item.id)}</td>
     </tr>
   `).join("") || `<tr><td colspan="8" class="muted">لا توجد تحصيلات مطابقة</td></tr>`;
 }
@@ -832,10 +879,7 @@ function renderExpenses() {
       <td data-label="الطريقة">${item.payment_method}</td>
       <td data-label="الخزينة">${item.deducted_from_treasury ? "نعم" : "لا"}</td>
       <td data-label="ملاحظة">${item.note || "-"}</td>
-      <td class="actions">
-        <button type="button" data-edit-expense="${item.id}" title="تعديل">✎</button>
-        <button class="danger" type="button" data-delete-expense="${item.id}" title="حذف">×</button>
-      </td>
+      <td class="actions">${adminRecordActions("data-edit-expense", "data-delete-expense", item.id)}</td>
     </tr>
   `).join("") || `<tr><td colspan="9" class="muted">لا توجد مصروفات مطابقة</td></tr>`;
 }
@@ -862,10 +906,7 @@ function renderTransfers() {
       <td data-label="المبلغ">${money(item.amount)}</td>
       <td data-label="المستخدم">${item.created_by_name || "-"}</td>
       <td data-label="ملاحظة">${item.note || "-"}</td>
-      <td class="actions">
-        <button type="button" data-edit-transfer="${item.id}" title="تعديل">✎</button>
-        <button class="danger" type="button" data-delete-transfer="${item.id}" title="حذف">×</button>
-      </td>
+      <td class="actions">${adminRecordActions("data-edit-transfer", "data-delete-transfer", item.id)}</td>
     </tr>
   `).join("") || `<tr><td colspan="7" class="muted">لا توجد عمليات توسيط</td></tr>`;
 }
@@ -887,10 +928,10 @@ function renderSupplyOrders() {
       <td data-label="تاريخ التوريد">${item.supply_date || "-"}</td>
       <td data-label="المستخدم">${item.created_by_name || "-"}</td>
       <td class="actions">
-        <button type="button" data-edit-supply-order="${item.id}" title="تعديل">✎</button>
+        ${isAdmin() ? `<button type="button" data-edit-supply-order="${item.id}" title="تعديل">✎</button>` : ""}
         <button type="button" data-xlsx-supply-order="${item.id}" title="Excel">Excel</button>
         <button type="button" data-pdf-supply-order="${item.id}" title="PDF">PDF</button>
-        <button class="danger" type="button" data-delete-supply-order="${item.id}" title="حذف">×</button>
+        ${isAdmin() ? `<button class="danger" type="button" data-delete-supply-order="${item.id}" title="حذف">×</button>` : ""}
       </td>
     </tr>
   `).join("") || `<tr><td colspan="12" class="muted">لا توجد أوامر توريد مسجلة</td></tr>`;
@@ -908,10 +949,10 @@ function renderDeliveryNotes() {
       <td data-label="إجمالي العدد">${money(item.total_quantity)}</td>
       <td data-label="المستخدم">${item.created_by_name || "-"}</td>
       <td class="actions">
-        <button type="button" data-edit-delivery-note="${item.id}" title="تعديل">✎</button>
+        ${isAdmin() ? `<button type="button" data-edit-delivery-note="${item.id}" title="تعديل">✎</button>` : ""}
         <button type="button" data-xlsx-delivery-note="${item.id}" title="Excel">Excel</button>
         <button type="button" data-pdf-delivery-note="${item.id}" title="PDF">PDF</button>
-        <button class="danger" type="button" data-delete-delivery-note="${item.id}" title="حذف">×</button>
+        ${isAdmin() ? `<button class="danger" type="button" data-delete-delivery-note="${item.id}" title="حذف">×</button>` : ""}
       </td>
     </tr>
   `).join("") || `<tr><td colspan="7" class="muted">لا توجد أذونات تسليم مسجلة</td></tr>`;
@@ -930,10 +971,10 @@ function renderInvoices() {
       <td data-label="الإجمالي">${money(item.total)}</td>
       <td data-label="المستخدم">${item.created_by_name || "-"}</td>
       <td class="actions">
-        <button type="button" data-edit-invoice="${item.id}" title="تعديل">✎</button>
+        ${isAdmin() ? `<button type="button" data-edit-invoice="${item.id}" title="تعديل">✎</button>` : ""}
         <button type="button" data-xlsx-invoice="${item.id}" title="Excel">Excel</button>
         <button type="button" data-pdf-invoice="${item.id}" title="PDF">PDF</button>
-        <button class="danger" type="button" data-delete-invoice="${item.id}" title="حذف">×</button>
+        ${isAdmin() ? `<button class="danger" type="button" data-delete-invoice="${item.id}" title="حذف">×</button>` : ""}
       </td>
     </tr>
   `).join("") || `<tr><td colspan="8" class="muted">لا توجد فواتير مسجلة</td></tr>`;
@@ -946,7 +987,7 @@ function renderUsers() {
     <tr>
       <td data-label="اسم المستخدم">${item.username}</td>
       <td data-label="الاسم الكامل">${item.display_name}</td>
-      <td data-label="الصلاحية">${item.role}</td>
+      <td data-label="الصلاحية">${displayRole(item.role)}</td>
       <td data-label="الحالة">${item.active ? "نشط" : "موقوف"}</td>
       <td data-label="تاريخ الإنشاء">${item.created_at}</td>
     </tr>
@@ -1141,6 +1182,7 @@ async function loadBootstrap() {
   state.collectionTypes = data.collection_types || [];
   state.responsibles = data.responsibles;
   state.user = data.user;
+  applyRolePermissions();
   qsa('select[name="responsible"]').forEach((select) => fillSelect(select, state.responsibles));
   qsa('select[name="customer_id"]').forEach((select) => fillCustomerSelect(select, select.value));
   fillCustomerSelect(qs("#collectionReportCustomer"), qs("#collectionReportCustomer")?.value);
@@ -1159,9 +1201,8 @@ async function loadBootstrap() {
   qsa('select[name="source_method"]').forEach((select) => fillSelect(select, state.paymentMethods));
   qsa('select[name="target_method"]').forEach((select) => fillSelect(select, state.paymentMethods));
   fillCustodyDatalist();
-  qsa(".admin-only").forEach((item) => item.classList.toggle("hidden", state.user?.role !== "admin"));
   qs("#statusLine").textContent = "نسخة Cloudflare العامة";
-  qs("#currentUser").textContent = state.user ? `${state.user.display_name} (${state.user.role})` : "";
+  qs("#currentUser").textContent = state.user ? `${state.user.display_name} (${roleLabel()})` : "";
 }
 
 async function loadDashboard() {
@@ -1192,7 +1233,7 @@ async function loadExpenses() {
 }
 
 async function loadAudit() {
-  if (!state.user || state.user.role !== "admin") {
+  if (!state.user || (!isAdmin() && !isViewer())) {
     state.audit = [];
     renderAudit();
     return;
@@ -1231,7 +1272,7 @@ async function loadInvoices() {
 }
 
 async function loadUsers() {
-  if (!state.user || state.user.role !== "admin") {
+  if (!state.user || (!isAdmin() && !isViewer())) {
     state.users = [];
     renderUsers();
     return;
@@ -1296,6 +1337,10 @@ async function loadResponsibleMonthly() {
 
 async function reloadAll() {
   await loadBootstrap();
+  if (isCollector()) {
+    await loadCollections();
+    return;
+  }
   await Promise.all([loadDashboard(), loadCollections(), loadCustomers(), loadExpenses(), loadTransfers(), loadSupplyOrders(), loadDeliveryNotes(), loadInvoices(), loadUsers(), loadAudit(), loadExpenseReport(), loadCollectionReport(), loadResponsibleMonthly()]);
 }
 
@@ -1369,7 +1414,8 @@ async function saveCollection(event) {
     showToast("تم حفظ التحصيل");
   }
   resetCollectionForm();
-  await Promise.all([loadBootstrap(), loadDashboard(), loadCollections(), loadCustomers(), loadAudit()]);
+  if (isCollector()) await Promise.all([loadBootstrap(), loadCollections()]);
+  else await Promise.all([loadBootstrap(), loadDashboard(), loadCollections(), loadCustomers(), loadAudit()]);
 }
 
 async function saveCustomer(event) {
