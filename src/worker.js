@@ -115,9 +115,20 @@ function authorizeApiRequest(user, pathname, method) {
   if (pathname === "/api/logout" && method === "POST") return;
   if (role === "viewer" && method === "GET") return;
   if (role === "collector") {
-    const canRead = method === "GET" && ["/api/me", "/api/bootstrap", "/api/collections"].includes(pathname);
-    const canInsertCollection = method === "POST" && pathname === "/api/collections";
-    if (canRead || canInsertCollection) return;
+    const canRead = method === "GET" && (
+      ["/api/me", "/api/bootstrap", "/api/collections", "/api/supply-orders"].includes(pathname)
+      || /^\/api\/supply-orders\/\d+\.xlsx$/.test(pathname)
+    );
+    const canInsert = method === "POST" && ["/api/collections", "/api/supply-orders"].includes(pathname);
+    const canUpdateSupplyOrder = method === "PUT" && /^\/api\/supply-orders\/\d+$/.test(pathname);
+    if (canRead || canInsert || canUpdateSupplyOrder) return;
+  }
+  if (role === "planner") {
+    const canRead = method === "GET" && (
+      ["/api/me", "/api/bootstrap", "/api/supply-orders"].includes(pathname)
+      || /^\/api\/supply-orders\/\d+\.xlsx$/.test(pathname)
+    );
+    if (canRead) return;
   }
   throw new HttpError("ليس لديك صلاحية للوصول إلى هذه العملية", 403);
 }
@@ -294,14 +305,16 @@ function publicUser(user) {
 
 async function bootstrap(env, user) {
   const collector = effectiveRole(user) === "collector";
-  const paymentMethods = await env.DB.prepare("SELECT id, name, note FROM payment_methods WHERE active = 1 ORDER BY name").all();
-  const expenseAccounts = collector ? { results: [] } : await env.DB.prepare("SELECT id, category, code, name FROM expense_accounts WHERE active = 1 ORDER BY category DESC, CAST(code AS INTEGER)").all().catch(() => ({ results: [] }));
-  const customers = await env.DB.prepare("SELECT id, name FROM customers WHERE active = 1 ORDER BY name").all().catch(() => ({ results: [] }));
-  const custodyHolders = await env.DB.prepare("SELECT id, name FROM custody_holders WHERE active = 1 ORDER BY name").all().catch(() => ({ results: [] }));
-  const designs = collector ? { results: [] } : await env.DB.prepare("SELECT id, name FROM designs WHERE active = 1 ORDER BY name").all().catch(() => ({ results: [] }));
-  const productSizes = collector ? { results: [] } : await env.DB.prepare("SELECT id, name FROM product_sizes WHERE active = 1 ORDER BY name").all().catch(() => ({ results: [] }));
-  const materials = collector ? { results: [] } : await env.DB.prepare("SELECT id, name FROM materials WHERE active = 1 ORDER BY name").all().catch(() => ({ results: [] }));
-  const users = collector ? { results: [] } : await env.DB.prepare("SELECT id, username, display_name, role, active, created_at FROM users ORDER BY username").all();
+  const planner = effectiveRole(user) === "planner";
+  const restricted = collector || planner;
+  const paymentMethods = planner ? { results: [] } : await env.DB.prepare("SELECT id, name, note FROM payment_methods WHERE active = 1 ORDER BY name").all();
+  const expenseAccounts = restricted ? { results: [] } : await env.DB.prepare("SELECT id, category, code, name FROM expense_accounts WHERE active = 1 ORDER BY category DESC, CAST(code AS INTEGER)").all().catch(() => ({ results: [] }));
+  const customers = planner ? { results: [] } : await env.DB.prepare("SELECT id, name FROM customers WHERE active = 1 ORDER BY name").all().catch(() => ({ results: [] }));
+  const custodyHolders = planner ? { results: [] } : await env.DB.prepare("SELECT id, name FROM custody_holders WHERE active = 1 ORDER BY name").all().catch(() => ({ results: [] }));
+  const designs = planner ? { results: [] } : await env.DB.prepare("SELECT id, name FROM designs WHERE active = 1 ORDER BY name").all().catch(() => ({ results: [] }));
+  const productSizes = planner ? { results: [] } : await env.DB.prepare("SELECT id, name FROM product_sizes WHERE active = 1 ORDER BY name").all().catch(() => ({ results: [] }));
+  const materials = planner ? { results: [] } : await env.DB.prepare("SELECT id, name FROM materials WHERE active = 1 ORDER BY name").all().catch(() => ({ results: [] }));
+  const users = restricted ? { results: [] } : await env.DB.prepare("SELECT id, username, display_name, role, active, created_at FROM users ORDER BY username").all();
   return json({
     payment_methods: paymentMethods.results,
     expense_accounts: expenseAccounts.results,
@@ -311,8 +324,8 @@ async function bootstrap(env, user) {
     product_sizes: productSizes.results,
     materials: materials.results,
     users: users.results,
-    responsibles: RESPONSIBLES,
-    collection_types: COLLECTION_TYPES,
+    responsibles: planner ? [] : RESPONSIBLES,
+    collection_types: planner ? [] : COLLECTION_TYPES,
     user,
   });
 }
@@ -732,7 +745,7 @@ function supplyOrderData(payload) {
 }
 
 async function createSupplyOrder(request, env, user) {
-  assertCanWrite(user);
+  assertCanWrite(user, { allowCollector: true });
   const data = await prepareSupplyOrder(env, request, user, await readJson(request));
   const now = nowIso();
   const result = await env.DB.prepare(
@@ -793,7 +806,7 @@ async function prepareSupplyOrder(env, request, user, payload) {
 }
 
 async function updateSupplyOrder(request, env, user, id) {
-  assertCanWrite(user);
+  assertCanWrite(user, { allowCollector: true });
   const before = await env.DB.prepare("SELECT * FROM supply_orders WHERE id = ?").bind(id).first();
   if (!before) throw new HttpError("Record not found", 404);
   const data = await prepareSupplyOrder(env, request, user, await readJson(request));
@@ -1891,7 +1904,7 @@ async function createUser(request, env, user) {
   const payload = await readJson(request);
   const username = String(payload.username || "").trim().toLowerCase();
   const displayName = String(payload.display_name || username).trim();
-  const role = ["admin", "collector", "viewer"].includes(payload.role) ? payload.role : "collector";
+  const role = ["admin", "collector", "planner", "viewer"].includes(payload.role) ? payload.role : "collector";
   const password = String(payload.password || "");
   if (!username || password.length < 8) throw new HttpError("اسم المستخدم مطلوب وكلمة المرور 8 أحرف على الأقل", 400);
   const hash = await hashPassword(password);

@@ -215,8 +215,18 @@ function isCollector() {
   return effectiveRole() === "collector";
 }
 
+function isPlanner() {
+  return effectiveRole() === "planner";
+}
+
+function canEditSupplyOrders() {
+  return isAdmin() || isCollector();
+}
+
 function displayRole(role) {
-  return (role === "collector" || role === "user") ? "محصل" : role || "";
+  if (role === "collector" || role === "user") return "محصل";
+  if (role === "planner") return "Planner";
+  return role || "";
 }
 
 function roleLabel() {
@@ -225,19 +235,25 @@ function roleLabel() {
 
 function applyRolePermissions() {
   const collector = isCollector();
-  qsa(".tab").forEach((tab) => tab.classList.toggle("hidden", collector && tab.dataset.tab !== "collections"));
+  const planner = isPlanner();
+  qsa(".tab").forEach((tab) => {
+    const allowedForCollector = ["collections", "supplyOrders"].includes(tab.dataset.tab);
+    const allowedForPlanner = tab.dataset.tab === "supplyOrders";
+    tab.classList.toggle("hidden", (collector && !allowedForCollector) || (planner && !allowedForPlanner));
+  });
   qsa(".admin-only").forEach((item) => item.classList.toggle("hidden", !isAdmin()));
-  qs("#mainMetrics")?.classList.toggle("hidden", collector);
-  qs("#backupBtn")?.classList.toggle("hidden", collector);
+  qs("#mainMetrics")?.classList.toggle("hidden", collector || planner);
+  qs("#backupBtn")?.classList.toggle("hidden", collector || planner);
 
   const forms = ["collectionForm", "customerForm", "supplyOrderForm", "deliveryNoteForm", "invoiceForm", "expenseForm", "methodForm", "transferForm", "userForm"];
   forms.forEach((id) => {
-    const allowed = isAdmin() || (collector && id === "collectionForm");
+    const allowed = isAdmin() || (collector && ["collectionForm", "supplyOrderForm"].includes(id));
     qs(`#${id}`)?.classList.toggle("hidden", !allowed);
   });
-  qsa(".entry-layout").forEach((layout) => layout.classList.toggle("read-only-layout", isViewer()));
+  qsa(".entry-layout").forEach((layout) => layout.classList.toggle("read-only-layout", isViewer() || planner));
 
   if (collector) setActiveTab("collections");
+  else if (planner) setActiveTab("supplyOrders");
   else if (qs(".tab.active.hidden")) setActiveTab("dashboard");
 }
 
@@ -928,7 +944,7 @@ function renderSupplyOrders() {
       <td data-label="تاريخ التوريد">${item.supply_date || "-"}</td>
       <td data-label="المستخدم">${item.created_by_name || "-"}</td>
       <td class="actions">
-        ${isAdmin() ? `<button type="button" data-edit-supply-order="${item.id}" title="تعديل">✎</button>` : ""}
+        ${canEditSupplyOrders() ? `<button type="button" data-edit-supply-order="${item.id}" title="تعديل">✎</button>` : ""}
         <button type="button" data-xlsx-supply-order="${item.id}" title="Excel">Excel</button>
         <button type="button" data-pdf-supply-order="${item.id}" title="PDF">PDF</button>
         ${isAdmin() ? `<button class="danger" type="button" data-delete-supply-order="${item.id}" title="حذف">×</button>` : ""}
@@ -1338,7 +1354,11 @@ async function loadResponsibleMonthly() {
 async function reloadAll() {
   await loadBootstrap();
   if (isCollector()) {
-    await loadCollections();
+    await Promise.all([loadCollections(), loadSupplyOrders()]);
+    return;
+  }
+  if (isPlanner()) {
+    await loadSupplyOrders();
     return;
   }
   await Promise.all([loadDashboard(), loadCollections(), loadCustomers(), loadExpenses(), loadTransfers(), loadSupplyOrders(), loadDeliveryNotes(), loadInvoices(), loadUsers(), loadAudit(), loadExpenseReport(), loadCollectionReport(), loadResponsibleMonthly()]);
@@ -1478,7 +1498,8 @@ async function saveSupplyOrder(event) {
     showToast("تم حفظ أمر التوريد");
   }
   resetSupplyOrderForm();
-  await Promise.all([loadBootstrap(), loadSupplyOrders(), loadCustomers(), loadAudit()]);
+  if (isCollector()) await Promise.all([loadBootstrap(), loadSupplyOrders()]);
+  else await Promise.all([loadBootstrap(), loadSupplyOrders(), loadCustomers(), loadAudit()]);
 }
 
 async function saveDeliveryNote(event) {
