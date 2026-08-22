@@ -314,7 +314,7 @@ function fillCustomerSelect(select, current = "") {
   select.innerHTML = "";
   const placeholder = document.createElement("option");
   placeholder.value = "";
-  placeholder.textContent = select.id === "collectionReportCustomer" ? "كل العملاء" : "اختر العميل";
+  placeholder.textContent = ["collectionReportCustomer", "collectionCustomerFilter"].includes(select.id) ? "كل العملاء" : "اختر العميل";
   select.appendChild(placeholder);
   state.customers.forEach((customer) => {
     const option = document.createElement("option");
@@ -916,9 +916,9 @@ function emptyChart() {
 
 function collectionQuery() {
   const params = new URLSearchParams();
-  const q = qs("#collectionSearch").value.trim();
+  const customerId = qs("#collectionCustomerFilter").value;
   const month = qs("#collectionMonth").value;
-  if (q) params.set("q", q);
+  if (customerId) params.set("customer_id", customerId);
   if (month) params.set("month", month);
   params.set("limit", "500");
   return params.toString();
@@ -1284,6 +1284,7 @@ async function loadBootstrap() {
   qsa('select[name="responsible"]').forEach((select) => fillSelect(select, state.responsibles));
   qsa('select[name="customer_id"]').forEach((select) => fillCustomerSelect(select, select.value));
   fillCustomerSelect(qs("#collectionReportCustomer"), qs("#collectionReportCustomer")?.value);
+  fillCustomerSelect(qs("#collectionCustomerFilter"), qs("#collectionCustomerFilter")?.value);
   fillCustomerSelect(qs("#statementCustomer"), qs("#statementCustomer")?.value);
   qsa('select[name="collection_type"]').forEach((select) => fillSelect(select, state.collectionTypes, select.value));
   fillSelect(qs("#collectionReportType"), ["", ...state.collectionTypes], qs("#collectionReportType")?.value);
@@ -1325,6 +1326,7 @@ async function loadCustomers() {
   renderCustomers();
   qsa('select[name="customer_id"]').forEach((select) => fillCustomerSelect(select, select.value));
   fillCustomerSelect(qs("#statementCustomer"), qs("#statementCustomer")?.value);
+  fillCustomerSelect(qs("#collectionCustomerFilter"), qs("#collectionCustomerFilter")?.value);
   fillSupplyOrderFormLookups();
   fillDeliveryNoteFormLookups();
 }
@@ -2116,7 +2118,7 @@ function bindEvents() {
     }
   });
 
-  qs("#collectionSearch").addEventListener("input", debounce(loadCollections, 250));
+  qs("#collectionCustomerFilter").addEventListener("change", loadCollections);
   qs("#customerSearch").addEventListener("input", renderCustomers);
   qs("#collectionMonth").addEventListener("change", loadCollections);
   qs('#collectionForm select[name="collection_type"]').addEventListener("change", toggleCollectionOtherType);

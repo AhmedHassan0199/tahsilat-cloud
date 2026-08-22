@@ -583,6 +583,7 @@ function filters(url, kind) {
   const month = url.searchParams.get("month");
   const method = url.searchParams.get("method");
   const q = url.searchParams.get("q");
+  const customerId = url.searchParams.get("customer_id");
   if (month) {
     clauses.push("month = ?");
     binds.push(Number(month));
@@ -590,6 +591,10 @@ function filters(url, kind) {
   if (method) {
     clauses.push("payment_method = ?");
     binds.push(method);
+  }
+  if (customerId && kind === "collections") {
+    clauses.push("customer_id = ?");
+    binds.push(Number(customerId));
   }
   if (q && kind === "collections") {
     clauses.push("(client_name LIKE ? OR collection_type LIKE ? OR note LIKE ?)");
