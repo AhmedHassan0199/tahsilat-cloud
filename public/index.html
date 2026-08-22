@@ -114,8 +114,12 @@
       </section>
 
       <section id="collections" class="tab-panel">
+        <div id="collectionModeTabs" class="collection-mode-tabs" role="tablist" aria-label="نوع عملية التحصيل">
+          <button class="collection-mode-tab active" data-collection-mode="normal" type="button" role="tab" aria-selected="true">تحصيل عادي</button>
+          <button class="collection-mode-tab" data-collection-mode="direct" type="button" role="tab" aria-selected="false">بيع نقدي مباشر</button>
+        </div>
         <div class="entry-layout">
-          <form id="collectionForm" class="form-panel">
+          <form id="collectionForm" class="form-panel collection-mode-panel" data-collection-panel="normal">
             <h2 id="collectionFormTitle">إضافة تحصيل</h2>
             <input type="hidden" name="id">
             <label>التاريخ<input name="entry_date" type="date"></label>
@@ -133,7 +137,7 @@
               <button type="button" class="secondary" id="cancelCollectionEdit">إلغاء</button>
             </div>
           </form>
-          <form id="directSaleForm" class="form-panel">
+          <form id="directSaleForm" class="form-panel collection-mode-panel hidden" data-collection-panel="direct">
             <h2>بيع نقدي مباشر بدون أمر توريد</h2>
             <p class="muted section-note">ينشئ إذن تسليم وفاتورة مدفوعة وتحصيلًا واحدًا مترابطًا.</p>
             <label>التاريخ<input name="entry_date" type="date"></label>

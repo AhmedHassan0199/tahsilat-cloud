@@ -251,18 +251,30 @@ function applyRolePermissions() {
   qsa(".admin-only").forEach((item) => item.classList.toggle("hidden", !isAdmin()));
   qs("#mainMetrics")?.classList.toggle("hidden", collector || planner || invoiceIssuer);
   qs("#backupBtn")?.classList.remove("hidden");
+  qs("#collectionModeTabs")?.classList.toggle("hidden", !(isAdmin() || collector));
 
   const forms = ["collectionForm", "directSaleForm", "customerForm", "supplyOrderForm", "deliveryNoteForm", "invoiceForm", "expenseForm", "methodForm", "transferForm", "userForm"];
   forms.forEach((id) => {
     const allowed = isAdmin() || (collector && ["collectionForm", "directSaleForm", "supplyOrderForm", "deliveryNoteForm"].includes(id)) || (invoiceIssuer && id === "invoiceForm");
     qs(`#${id}`)?.classList.toggle("hidden", !allowed);
   });
+  if (isAdmin() || collector) setCollectionMode("normal");
   qsa(".entry-layout").forEach((layout) => layout.classList.toggle("read-only-layout", isViewer() || planner));
 
   if (collector) setActiveTab("collections");
   else if (planner) setActiveTab("supplyOrders");
   else if (invoiceIssuer) setActiveTab("invoices");
   else if (qs(".tab.active.hidden")) setActiveTab("dashboard");
+}
+
+function setCollectionMode(mode) {
+  const selected = mode === "direct" ? "direct" : "normal";
+  qsa(".collection-mode-tab").forEach((tab) => {
+    const active = tab.dataset.collectionMode === selected;
+    tab.classList.toggle("active", active);
+    tab.setAttribute("aria-selected", active ? "true" : "false");
+  });
+  qsa(".collection-mode-panel").forEach((panel) => panel.classList.toggle("hidden", panel.dataset.collectionPanel !== selected));
 }
 
 function adminRecordActions(editAttribute, deleteAttribute, id) {
@@ -1691,6 +1703,7 @@ async function downloadBackup() {
 function editCollection(id) {
   const item = state.collections.find((row) => String(row.id) === String(id));
   if (!item) return;
+  setCollectionMode("normal");
   const form = qs("#collectionForm");
   form.elements.id.value = item.id;
   form.entry_date.value = item.entry_date || "";
@@ -1873,6 +1886,10 @@ function bindEvents() {
       tab.classList.add("active");
       qs(`#${tab.dataset.reportTab}`).classList.add("active");
     });
+  });
+
+  qsa(".collection-mode-tab").forEach((tab) => {
+    tab.addEventListener("click", () => setCollectionMode(tab.dataset.collectionMode));
   });
 
   qs("#refreshBtn").addEventListener("click", async () => {
