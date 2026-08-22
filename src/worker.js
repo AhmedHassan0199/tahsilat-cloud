@@ -43,6 +43,7 @@ async function handleApi(request, env, url) {
   if (url.pathname === "/api/dashboard" && method === "GET") return dashboard(env);
   if (url.pathname === "/api/collections" && method === "GET") return listCollections(env, url);
   if (url.pathname === "/api/collections" && method === "POST") return createCollection(request, env, user);
+  if (url.pathname === "/api/direct-sales" && method === "POST") return createDirectSale(request, env, user);
   if (url.pathname.startsWith("/api/collections/")) {
     const id = idFromPath(url.pathname);
     if (method === "PUT") return updateCollection(request, env, user, id);
@@ -116,20 +117,28 @@ function authorizeApiRequest(user, pathname, method) {
   if (role === "viewer" && method === "GET") return;
   if (role === "collector") {
     const canRead = method === "GET" && (
-      ["/api/me", "/api/bootstrap", "/api/collections", "/api/supply-orders"].includes(pathname)
-      || /^\/api\/supply-orders\/\d+\.xlsx$/.test(pathname)
+      ["/api/me", "/api/bootstrap", "/api/collections", "/api/supply-orders", "/api/delivery-notes", "/api/invoices", "/api/customer-statement", "/api/customer-statement.xlsx", "/api/backup"].includes(pathname)
+      || /^\/api\/(supply-orders|delivery-notes|invoices)\/\d+\.xlsx$/.test(pathname)
     );
-    const canInsert = method === "POST" && ["/api/collections", "/api/supply-orders"].includes(pathname);
+    const canInsert = method === "POST" && ["/api/collections", "/api/supply-orders", "/api/delivery-notes", "/api/direct-sales"].includes(pathname);
     const canUpdateSupplyOrder = method === "PUT" && /^\/api\/supply-orders\/\d+$/.test(pathname);
     if (canRead || canInsert || canUpdateSupplyOrder) return;
   }
   if (role === "planner") {
     const canRead = method === "GET" && (
-      ["/api/me", "/api/bootstrap", "/api/supply-orders"].includes(pathname)
+      ["/api/me", "/api/bootstrap", "/api/supply-orders", "/api/backup"].includes(pathname)
       || /^\/api\/supply-orders\/\d+\.xlsx$/.test(pathname)
     );
     if (canRead) return;
   }
+  if (role === "invoice_issuer") {
+    const canRead = method === "GET" && (
+      ["/api/me", "/api/bootstrap", "/api/supply-orders", "/api/delivery-notes", "/api/invoices", "/api/customer-statement", "/api/customer-statement.xlsx", "/api/backup"].includes(pathname)
+      || /^\/api\/(supply-orders|delivery-notes|invoices)\/\d+\.xlsx$/.test(pathname)
+    );
+    if (canRead || (method === "POST" && pathname === "/api/invoices")) return;
+  }
+  if (pathname === "/api/backup" && method === "GET") return;
   throw new HttpError("ليس لديك صلاحية للوصول إلى هذه العملية", 403);
 }
 
@@ -306,11 +315,12 @@ function publicUser(user) {
 async function bootstrap(env, user) {
   const collector = effectiveRole(user) === "collector";
   const planner = effectiveRole(user) === "planner";
-  const restricted = collector || planner;
-  const paymentMethods = planner ? { results: [] } : await env.DB.prepare("SELECT id, name, note FROM payment_methods WHERE active = 1 ORDER BY name").all();
+  const invoiceIssuer = effectiveRole(user) === "invoice_issuer";
+  const restricted = collector || planner || invoiceIssuer;
+  const paymentMethods = (planner || invoiceIssuer) ? { results: [] } : await env.DB.prepare("SELECT id, name, note FROM payment_methods WHERE active = 1 ORDER BY name").all();
   const expenseAccounts = restricted ? { results: [] } : await env.DB.prepare("SELECT id, category, code, name FROM expense_accounts WHERE active = 1 ORDER BY category DESC, CAST(code AS INTEGER)").all().catch(() => ({ results: [] }));
   const customers = planner ? { results: [] } : await env.DB.prepare("SELECT id, name FROM customers WHERE active = 1 ORDER BY name").all().catch(() => ({ results: [] }));
-  const custodyHolders = planner ? { results: [] } : await env.DB.prepare("SELECT id, name FROM custody_holders WHERE active = 1 ORDER BY name").all().catch(() => ({ results: [] }));
+  const custodyHolders = (planner || invoiceIssuer) ? { results: [] } : await env.DB.prepare("SELECT id, name FROM custody_holders WHERE active = 1 ORDER BY name").all().catch(() => ({ results: [] }));
   const designs = planner ? { results: [] } : await env.DB.prepare("SELECT id, name FROM designs WHERE active = 1 ORDER BY name").all().catch(() => ({ results: [] }));
   const productSizes = planner ? { results: [] } : await env.DB.prepare("SELECT id, name FROM product_sizes WHERE active = 1 ORDER BY name").all().catch(() => ({ results: [] }));
   const materials = planner ? { results: [] } : await env.DB.prepare("SELECT id, name FROM materials WHERE active = 1 ORDER BY name").all().catch(() => ({ results: [] }));
@@ -947,7 +957,7 @@ function deliveryItemData(payload, index) {
 }
 
 async function createDeliveryNote(request, env, user) {
-  assertCanWrite(user);
+  assertCanWrite(user, { allowCollector: true });
   const data = await prepareDeliveryNote(env, await readJson(request));
   const now = nowIso();
   const result = await env.DB.prepare(
@@ -1097,7 +1107,8 @@ function invoiceData(payload) {
 }
 
 async function createInvoice(request, env, user) {
-  assertCanWrite(user);
+  const role = effectiveRole(user);
+  if (!["admin", "invoice_issuer"].includes(role)) throw new HttpError("ليس لديك صلاحية لإصدار الفواتير", 403);
   const data = await prepareInvoice(env, await readJson(request));
   const now = nowIso();
   const result = await env.DB.prepare(
@@ -1224,6 +1235,89 @@ async function deleteInvoice(env, user, id) {
   await env.DB.prepare("DELETE FROM invoices WHERE id = ?").bind(id).run();
   await insertAudit(env, null, user, "DELETE", "invoices", id, before, null);
   return json({ ok: true });
+}
+
+async function createDirectSale(request, env, user) {
+  if (!["admin", "collector"].includes(effectiveRole(user))) throw new HttpError("ليس لديك صلاحية لتسجيل البيع النقدي", 403);
+  const payload = await readJson(request);
+  const entryDate = parseDateValue(payload.entry_date) || new Date().toISOString().slice(0, 10);
+  const responsible = String(payload.responsible || "").trim();
+  const paymentMethod = String(payload.payment_method || "").trim();
+  const deliveryCharge = Number(payload.delivery_charge || 0);
+  const note = String(payload.note || "").trim() || null;
+  const token = crypto.randomUUID();
+  if (!responsible) throw new HttpError("المسؤول مطلوب", 400);
+  if (!paymentMethod) throw new HttpError("طريقة التحصيل مطلوبة", 400);
+  if (!Number.isFinite(deliveryCharge) || deliveryCharge < 0) throw new HttpError("مصاريف النقل غير صحيحة", 400);
+
+  let customer = null;
+  let customerKey = "";
+  let customerName = "";
+  const customerId = Number(payload.customer_id || 0) || null;
+  if (customerId) {
+    customer = await env.DB.prepare("SELECT id, name, normalized_name FROM customers WHERE id=? AND active=1").bind(customerId).first();
+    if (!customer) throw new HttpError("العميل غير صحيح", 400);
+    customerName = customer.name;
+    customerKey = customer.normalized_name;
+  } else {
+    customerName = normalizeCustomerName(payload.manual_customer_name);
+    if (!customerName) throw new HttpError("اسم العميل مطلوب", 400);
+    const saveCustomer = truthy(payload.save_customer);
+    const normalKey = normalizedCustomerKey(customerName);
+    const existing = await env.DB.prepare("SELECT id, name, normalized_name FROM customers WHERE normalized_name=?").bind(normalKey).first();
+    if (existing && saveCustomer) {
+      customer = existing;
+      customerName = existing.name;
+      customerKey = existing.normalized_name;
+    } else {
+      customerKey = saveCustomer ? normalKey : `${normalKey}#عابر#${token}`;
+    }
+  }
+
+  const rawItems = Array.isArray(payload.items) ? payload.items : [];
+  if (!rawItems.length) throw new HttpError("يجب إضافة صنف واحد على الأقل", 400);
+  const items = [];
+  for (let index = 0; index < rawItems.length; index += 1) {
+    const raw = rawItems[index];
+    const productType = ["كوبايات - علب", "غطيان"].includes(raw.product_type) ? raw.product_type : "";
+    const designId = Number(raw.design_id || 0) || null;
+    const sizeId = Number(raw.size_id || 0) || null;
+    const quantityUnit = ["كيلو", "كرتونه"].includes(raw.quantity_unit) ? raw.quantity_unit : "كرتونه";
+    const quantity = Number(raw.quantity_amount || 0);
+    const unitPrice = Number(raw.unit_price || 0);
+    if (!productType || !sizeId || quantity <= 0 || unitPrice < 0 || !Number.isFinite(quantity) || !Number.isFinite(unitPrice)) throw new HttpError(`بيانات الصنف ${index + 1} غير صحيحة`, 400);
+    const design = productType === "غطيان" ? { id: null, name: "" } : await env.DB.prepare("SELECT id,name FROM designs WHERE id=? AND active=1").bind(designId).first();
+    const size = await env.DB.prepare("SELECT id,name FROM product_sizes WHERE id=? AND active=1").bind(sizeId).first();
+    if (!design || !size) throw new HttpError(`التصميم أو المقاس غير صحيح في الصنف ${index + 1}`, 400);
+    items.push({ line_no: index + 1, product_type: productType, design_id: design.id, design_name: design.name, size_id: size.id, size_name: size.name, quantity_unit: quantityUnit, quantity_amount: quantity, unit_price: unitPrice, line_total: quantity * unitPrice, note: String(raw.note || "").trim() || null });
+  }
+  const subtotal = items.reduce((sum, item) => sum + item.line_total, 0);
+  const total = subtotal + deliveryCharge;
+  if (!(total > 0)) throw new HttpError("إجمالي البيع يجب أن يكون أكبر من صفر", 400);
+  const now = nowIso();
+  const statements = [];
+  if (!customer) {
+    statements.push(env.DB.prepare(`INSERT INTO customers(name,normalized_name,active,is_transient,created_at,updated_at) VALUES(?,?,?, ?,?,?)`)
+      .bind(customerName, customerKey, truthy(payload.save_customer) ? 1 : 0, truthy(payload.save_customer) ? 0 : 1, now, now));
+  }
+  statements.push(env.DB.prepare(`INSERT INTO delivery_notes(delivery_date,customer_id,customer_name,note,created_by,created_at,updated_at,transaction_type,transaction_token)
+    VALUES(?,(SELECT id FROM customers WHERE normalized_name=?),?,?,?,?,?,'direct_cash',?)`).bind(entryDate, customerKey, customerName, note, user.id, now, now, token));
+  for (const item of items) statements.push(env.DB.prepare(`INSERT INTO delivery_note_items(delivery_note_id,line_no,product_type,design_id,design_name,size_id,size_name,quantity_unit,quantity_amount,note)
+    VALUES((SELECT id FROM delivery_notes WHERE transaction_token=?),?,?,?,?,?,?,?,?,?)`).bind(token, item.line_no, item.product_type, item.design_id, item.design_name, item.size_id, item.size_name, item.quantity_unit, item.quantity_amount, item.note));
+  statements.push(env.DB.prepare(`INSERT INTO invoices(invoice_date,delivery_note_id,customer_id,customer_name,subtotal,delivery_charge,total,note,created_by,created_at,updated_at,transaction_type,payment_status,transaction_token)
+    VALUES(?,(SELECT id FROM delivery_notes WHERE transaction_token=?),(SELECT id FROM customers WHERE normalized_name=?),?,?,?,?,?,?,?,?,'direct_cash','paid',?)`).bind(entryDate, token, customerKey, customerName, subtotal, deliveryCharge, total, note, user.id, now, now, token));
+  for (const item of items) statements.push(env.DB.prepare(`INSERT INTO invoice_items(invoice_id,delivery_note_item_id,line_no,product_type,design_id,design_name,size_id,size_name,quantity_unit,quantity_amount,supply_order_id,price_type,unit_price,line_total)
+    VALUES((SELECT id FROM invoices WHERE transaction_token=?),(SELECT id FROM delivery_note_items WHERE delivery_note_id=(SELECT id FROM delivery_notes WHERE transaction_token=?) AND line_no=?),?,?,?,?,?,?,?,?,NULL,'manual',?,?)`).bind(token, token, item.line_no, item.line_no, item.product_type, item.design_id, item.design_name, item.size_id, item.size_name, item.quantity_unit, item.quantity_amount, item.unit_price, item.line_total));
+  statements.push(env.DB.prepare(`INSERT INTO collections(entry_date,month,responsible,customer_id,client_name,collection_type,amount,payment_method,note,created_at,updated_at,transaction_type,delivery_note_id,invoice_id,transaction_token)
+    VALUES(?,?,?,?,?,'بيع نقدي مباشر',?,?,?,?,?,'direct_cash',(SELECT id FROM delivery_notes WHERE transaction_token=?),(SELECT id FROM invoices WHERE transaction_token=?),?)`).bind(entryDate, monthFromDate(entryDate), responsible, customer ? customer.id : null, customerName, total, paymentMethod, note, now, now, token, token, token));
+  // The customer subquery is needed when the customer was created in this same atomic batch.
+  if (!customer) statements[statements.length - 1] = env.DB.prepare(`INSERT INTO collections(entry_date,month,responsible,customer_id,client_name,collection_type,amount,payment_method,note,created_at,updated_at,transaction_type,delivery_note_id,invoice_id,transaction_token)
+    VALUES(?,?,?,(SELECT id FROM customers WHERE normalized_name=?),?,'بيع نقدي مباشر',?,?,?,?,?,'direct_cash',(SELECT id FROM delivery_notes WHERE transaction_token=?),(SELECT id FROM invoices WHERE transaction_token=?),?)`).bind(entryDate, monthFromDate(entryDate), responsible, customerKey, customerName, total, paymentMethod, note, now, now, token, token, token);
+  statements.push(env.DB.prepare("UPDATE invoices SET collection_id=(SELECT id FROM collections WHERE transaction_token=?) WHERE transaction_token=?").bind(token, token));
+  await env.DB.batch(statements);
+  const created = await env.DB.prepare("SELECT id,invoice_id,delivery_note_id,amount FROM collections WHERE transaction_token=?").bind(token).first();
+  await insertAudit(env, request, user, "INSERT", "direct_sales", created?.id, null, { ...created, customer_name: customerName, item_count: items.length });
+  return json(created);
 }
 
 async function createCollection(request, env, user) {
@@ -1874,7 +1968,7 @@ async function auditLog(env, user) {
 }
 
 async function backup(env, user) {
-  if (!["admin", "viewer"].includes(effectiveRole(user))) throw new HttpError("Admins and viewers only", 403);
+  if (!user) throw new HttpError("Authentication required", 401);
   const tables = {};
   for (const table of ["users", "payment_methods", "expense_accounts", "customers", "custody_holders", "designs", "product_sizes", "materials", "collections", "expenses", "transfers", "supply_orders", "delivery_notes", "delivery_note_items", "invoices", "invoice_items", "audit_logs"]) {
     const result = await env.DB.prepare(`SELECT * FROM ${table} ORDER BY id`).all();
@@ -1904,7 +1998,7 @@ async function createUser(request, env, user) {
   const payload = await readJson(request);
   const username = String(payload.username || "").trim().toLowerCase();
   const displayName = String(payload.display_name || username).trim();
-  const role = ["admin", "collector", "planner", "viewer"].includes(payload.role) ? payload.role : "collector";
+  const role = ["admin", "collector", "planner", "invoice_issuer", "viewer"].includes(payload.role) ? payload.role : "collector";
   const password = String(payload.password || "");
   if (!username || password.length < 8) throw new HttpError("اسم المستخدم مطلوب وكلمة المرور 8 أحرف على الأقل", 400);
   const hash = await hashPassword(password);

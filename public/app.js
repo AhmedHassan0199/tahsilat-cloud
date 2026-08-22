@@ -219,6 +219,10 @@ function isPlanner() {
   return effectiveRole() === "planner";
 }
 
+function isInvoiceIssuer() {
+  return effectiveRole() === "invoice_issuer";
+}
+
 function canEditSupplyOrders() {
   return isAdmin() || isCollector();
 }
@@ -226,6 +230,7 @@ function canEditSupplyOrders() {
 function displayRole(role) {
   if (role === "collector" || role === "user") return "محصل";
   if (role === "planner") return "Planner";
+  if (role === "invoice_issuer") return "مُصدر فواتير";
   return role || "";
 }
 
@@ -236,24 +241,27 @@ function roleLabel() {
 function applyRolePermissions() {
   const collector = isCollector();
   const planner = isPlanner();
+  const invoiceIssuer = isInvoiceIssuer();
   qsa(".tab").forEach((tab) => {
-    const allowedForCollector = ["collections", "supplyOrders"].includes(tab.dataset.tab);
+    const allowedForCollector = ["collections", "supplyOrders", "deliveryNotes", "invoices", "customerStatement"].includes(tab.dataset.tab);
     const allowedForPlanner = tab.dataset.tab === "supplyOrders";
-    tab.classList.toggle("hidden", (collector && !allowedForCollector) || (planner && !allowedForPlanner));
+    const allowedForInvoiceIssuer = ["supplyOrders", "deliveryNotes", "invoices", "customerStatement"].includes(tab.dataset.tab);
+    tab.classList.toggle("hidden", (collector && !allowedForCollector) || (planner && !allowedForPlanner) || (invoiceIssuer && !allowedForInvoiceIssuer));
   });
   qsa(".admin-only").forEach((item) => item.classList.toggle("hidden", !isAdmin()));
-  qs("#mainMetrics")?.classList.toggle("hidden", collector || planner);
-  qs("#backupBtn")?.classList.toggle("hidden", collector || planner);
+  qs("#mainMetrics")?.classList.toggle("hidden", collector || planner || invoiceIssuer);
+  qs("#backupBtn")?.classList.remove("hidden");
 
-  const forms = ["collectionForm", "customerForm", "supplyOrderForm", "deliveryNoteForm", "invoiceForm", "expenseForm", "methodForm", "transferForm", "userForm"];
+  const forms = ["collectionForm", "directSaleForm", "customerForm", "supplyOrderForm", "deliveryNoteForm", "invoiceForm", "expenseForm", "methodForm", "transferForm", "userForm"];
   forms.forEach((id) => {
-    const allowed = isAdmin() || (collector && ["collectionForm", "supplyOrderForm"].includes(id));
+    const allowed = isAdmin() || (collector && ["collectionForm", "directSaleForm", "supplyOrderForm", "deliveryNoteForm"].includes(id)) || (invoiceIssuer && id === "invoiceForm");
     qs(`#${id}`)?.classList.toggle("hidden", !allowed);
   });
   qsa(".entry-layout").forEach((layout) => layout.classList.toggle("read-only-layout", isViewer() || planner));
 
   if (collector) setActiveTab("collections");
   else if (planner) setActiveTab("supplyOrders");
+  else if (invoiceIssuer) setActiveTab("invoices");
   else if (qs(".tab.active.hidden")) setActiveTab("dashboard");
 }
 
@@ -1354,11 +1362,15 @@ async function loadResponsibleMonthly() {
 async function reloadAll() {
   await loadBootstrap();
   if (isCollector()) {
-    await Promise.all([loadCollections(), loadSupplyOrders()]);
+    await Promise.all([loadCollections(), loadSupplyOrders(), loadDeliveryNotes(), loadInvoices()]);
     return;
   }
   if (isPlanner()) {
     await loadSupplyOrders();
+    return;
+  }
+  if (isInvoiceIssuer()) {
+    await Promise.all([loadSupplyOrders(), loadDeliveryNotes(), loadInvoices()]);
     return;
   }
   await Promise.all([loadDashboard(), loadCollections(), loadCustomers(), loadExpenses(), loadTransfers(), loadSupplyOrders(), loadDeliveryNotes(), loadInvoices(), loadUsers(), loadAudit(), loadExpenseReport(), loadCollectionReport(), loadResponsibleMonthly()]);
@@ -1383,6 +1395,49 @@ function resetCollectionForm() {
   fillSelect(form.payment_method, state.paymentMethods);
   toggleCollectionOtherType();
   toggleCollectionCustody();
+}
+
+function fillDirectSaleForm() {
+  const form = qs("#directSaleForm");
+  if (!form) return;
+  fillSelect(form.responsible, state.responsibles, form.responsible.value);
+  fillCustomerSelect(form.customer_id, form.customer_id.value);
+  fillSelect(form.payment_method, state.paymentMethods, form.payment_method.value);
+  fillExistingLookupSelect(form.design_id, state.designs, "اختر التصميم", form.design_id.value);
+  fillExistingLookupSelect(form.size_id, state.productSizes, "اختر المقاس", form.size_id.value);
+  toggleDirectSaleCustomer();
+}
+
+function toggleDirectSaleCustomer() {
+  const form = qs("#directSaleForm");
+  if (!form) return;
+  const existing = Boolean(form.customer_id.value);
+  qs("#directManualCustomerWrap")?.classList.toggle("hidden", existing);
+  qs("#directSaveCustomerWrap")?.classList.toggle("hidden", existing);
+  form.manual_customer_name.required = !existing;
+}
+
+async function saveDirectSale(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const raw = formData(form);
+  const payload = {
+    entry_date: raw.entry_date,
+    responsible: raw.responsible,
+    customer_id: raw.customer_id,
+    manual_customer_name: raw.manual_customer_name,
+    save_customer: raw.save_customer,
+    payment_method: raw.payment_method,
+    delivery_charge: raw.delivery_charge,
+    note: raw.note,
+    items: [{ product_type: raw.product_type, design_id: raw.design_id, size_id: raw.size_id, quantity_unit: raw.quantity_unit, quantity_amount: raw.quantity_amount, unit_price: raw.unit_price }],
+  };
+  const result = await api("/api/direct-sales", { method: "POST", body: JSON.stringify(payload) });
+  form.reset();
+  fillDirectSaleForm();
+  showToast(`تم إصدار الفاتورة #${result.invoice_id} وتسجيل التحصيل`);
+  await Promise.all([loadBootstrap(), loadCollections(), loadDeliveryNotes(), loadInvoices()]);
+  if (isAdmin()) await Promise.all([loadDashboard(), loadCustomers(), loadAudit()]);
 }
 
 function resetExpenseForm() {
@@ -1417,6 +1472,7 @@ function resetDeliveryNoteForm() {
   qs("#deliveryNoteFormTitle").textContent = "إذن التسليم";
   state.deliveryDraft = { index: 0, items: [blankDeliveryItem()] };
   fillDeliveryNoteFormLookups();
+  fillDirectSaleForm();
   showDeliveryItem(0);
 }
 
@@ -1881,6 +1937,7 @@ function bindEvents() {
   });
 
   qs("#collectionForm").addEventListener("submit", (event) => saveCollection(event).catch((error) => showToast(error.message, true)));
+  qs("#directSaleForm").addEventListener("submit", (event) => saveDirectSale(event).catch((error) => showToast(error.message, true)));
   qs("#customerForm").addEventListener("submit", (event) => saveCustomer(event).catch((error) => showToast(error.message, true)));
   qs("#supplyOrderForm").addEventListener("submit", (event) => saveSupplyOrder(event).catch((error) => showToast(error.message, true)));
   qs("#deliveryNoteForm").addEventListener("submit", (event) => saveDeliveryNote(event).catch((error) => showToast(error.message, true)));
@@ -1942,6 +1999,12 @@ function bindEvents() {
   qs("#collectionMonth").addEventListener("change", loadCollections);
   qs('#collectionForm select[name="collection_type"]').addEventListener("change", toggleCollectionOtherType);
   qs('#collectionForm select[name="payment_method"]').addEventListener("change", toggleCollectionCustody);
+  qs('#directSaleForm select[name="customer_id"]').addEventListener("change", toggleDirectSaleCustomer);
+  qs('#directSaleForm select[name="product_type"]').addEventListener("change", (event) => {
+    const covers = event.target.value === "غطيان";
+    qs("#directDesignWrap").classList.toggle("hidden", covers);
+    qs('#directSaleForm select[name="design_id"]').required = !covers;
+  });
   qs("#expenseSearch").addEventListener("input", debounce(loadExpenses, 250));
   qs("#expenseMonth").addEventListener("change", loadExpenses);
   qs('#transferForm select[name="source_method"]').addEventListener("change", toggleTransferCustody);

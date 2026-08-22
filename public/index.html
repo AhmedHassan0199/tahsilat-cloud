@@ -133,6 +133,25 @@
               <button type="button" class="secondary" id="cancelCollectionEdit">إلغاء</button>
             </div>
           </form>
+          <form id="directSaleForm" class="form-panel">
+            <h2>بيع نقدي مباشر بدون أمر توريد</h2>
+            <p class="muted section-note">ينشئ إذن تسليم وفاتورة مدفوعة وتحصيلًا واحدًا مترابطًا.</p>
+            <label>التاريخ<input name="entry_date" type="date"></label>
+            <label>المسؤول<select name="responsible" required></select></label>
+            <label>عميل مسجل (اختياري)<select name="customer_id"></select></label>
+            <label id="directManualCustomerWrap">اسم العميل يدويًا<input name="manual_customer_name" autocomplete="off"></label>
+            <label class="check" id="directSaveCustomerWrap"><input name="save_customer" type="checkbox"> حفظ العميل في قائمة العملاء</label>
+            <label>نوع الصنف<select name="product_type"><option value="كوبايات - علب">كوبايات - علب</option><option value="غطيان">غطيان</option></select></label>
+            <label id="directDesignWrap">التصميم<select name="design_id"></select></label>
+            <label>المقاس<select name="size_id" required></select></label>
+            <label>وحدة العدد<select name="quantity_unit"><option>كرتونه</option><option>كيلو</option></select></label>
+            <label>العدد<input name="quantity_amount" type="number" min="0.01" step="0.01" required></label>
+            <label>سعر الوحدة<input name="unit_price" type="number" min="0" step="0.01" required></label>
+            <label>مصاريف النقل<input name="delivery_charge" type="number" min="0" step="0.01" value="0"></label>
+            <label>طريقة التحصيل<select name="payment_method" required></select></label>
+            <label class="wide">ملاحظة<textarea name="note" rows="2"></textarea></label>
+            <div class="form-actions"><button type="submit">إصدار الفاتورة وتسجيل التحصيل</button></div>
+          </form>
           <div class="panel">
             <div class="panel-head">
               <h2>سجل التحصيلات</h2>
@@ -505,7 +524,7 @@
             <label>اسم المستخدم<input name="username" required autocomplete="off"></label>
             <label>الاسم الكامل<input name="display_name" required autocomplete="off"></label>
             <label>كلمة المرور<input name="password" type="password" minlength="8" required></label>
-            <label>الصلاحية<select name="role"><option value="collector">محصل</option><option value="planner">Planner</option><option value="admin">admin</option><option value="viewer">viewer</option></select></label>
+            <label>الصلاحية<select name="role"><option value="collector">محصل</option><option value="invoice_issuer">مُصدر فواتير</option><option value="planner">Planner</option><option value="admin">admin</option><option value="viewer">viewer</option></select></label>
             <div class="form-actions"><button type="submit">إضافة مستخدم</button></div>
           </form>
           <div class="panel">
