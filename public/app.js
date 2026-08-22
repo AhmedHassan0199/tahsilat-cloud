@@ -237,7 +237,7 @@ function isInvoiceIssuer() {
 }
 
 function canEditSupplyOrders() {
-  return isAdmin() || isCollector();
+  return isAdmin();
 }
 
 function displayRole(role) {

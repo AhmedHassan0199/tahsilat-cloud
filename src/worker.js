@@ -121,8 +121,7 @@ function authorizeApiRequest(user, pathname, method) {
       || /^\/api\/(supply-orders|delivery-notes|invoices)\/\d+\.xlsx$/.test(pathname)
     );
     const canInsert = method === "POST" && ["/api/collections", "/api/supply-orders", "/api/delivery-notes", "/api/direct-sales"].includes(pathname);
-    const canUpdateSupplyOrder = method === "PUT" && /^\/api\/supply-orders\/\d+$/.test(pathname);
-    if (canRead || canInsert || canUpdateSupplyOrder) return;
+    if (canRead || canInsert) return;
   }
   if (role === "planner") {
     const canRead = method === "GET" && (
