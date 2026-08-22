@@ -147,8 +147,11 @@ function money(value) {
 
 function showToast(message, isError = false) {
   const toast = qs("#toast");
-  toast.textContent = message;
-  toast.style.background = isError ? "#b42318" : "#101828";
+  toast.innerHTML = `<span class="toast-icon" aria-hidden="true">${isError ? "!" : "✓"}</span><span class="toast-message">${escapeHtml(message)}</span><span class="toast-progress"></span>`;
+  toast.classList.toggle("error", isError);
+  toast.classList.toggle("success", !isError);
+  toast.classList.remove("show");
+  void toast.offsetWidth;
   toast.classList.add("show");
   clearTimeout(showToast.timer);
   showToast.timer = setTimeout(() => toast.classList.remove("show"), 3200);
@@ -158,20 +161,25 @@ async function api(path, options = {}) {
   const authMode = options.authMode || "default";
   const fetchOptions = { ...options };
   delete fetchOptions.authMode;
-  const response = await fetch(path, {
-    headers: { "Content-Type": "application/json" },
-    credentials: "same-origin",
-    ...fetchOptions,
-  });
-  const data = await response.json().catch(() => ({}));
-  if (response.status === 401 && authMode !== "login") {
-    showLogin();
-    throw new Error("انتهت الجلسة، برجاء تسجيل الدخول");
+  api.pending = (api.pending || 0) + 1;
+  document.body.classList.add("api-busy");
+  try {
+    const response = await fetch(path, {
+      headers: { "Content-Type": "application/json" },
+      credentials: "same-origin",
+      ...fetchOptions,
+    });
+    const data = await response.json().catch(() => ({}));
+    if (response.status === 401 && authMode !== "login") {
+      showLogin();
+      throw new Error("انتهت الجلسة، برجاء تسجيل الدخول");
+    }
+    if (!response.ok) throw new Error(data.error || "حدث خطأ غير متوقع");
+    return data;
+  } finally {
+    api.pending -= 1;
+    if (!api.pending) document.body.classList.remove("api-busy");
   }
-  if (!response.ok) {
-    throw new Error(data.error || "حدث خطأ غير متوقع");
-  }
-  return data;
 }
 
 function showLogin() {
@@ -197,6 +205,10 @@ function showLoginErrorFromUrl() {
 function setActiveTab(name) {
   qsa(".tab").forEach((item) => item.classList.toggle("active", item.dataset.tab === name));
   qsa(".tab-panel").forEach((item) => item.classList.toggle("active", item.id === name));
+  const activePanel = qs(`#${name}`);
+  activePanel?.classList.remove("panel-enter");
+  void activePanel?.offsetWidth;
+  activePanel?.classList.add("panel-enter");
 }
 
 function effectiveRole() {
@@ -722,6 +734,11 @@ function monthName(month) {
 function renderDashboard() {
   const data = state.dashboard;
   if (!data) return;
+
+  const metrics = qs("#mainMetrics");
+  metrics?.classList.remove("dashboard-animate");
+  void metrics?.offsetWidth;
+  metrics?.classList.add("dashboard-animate");
 
   qs("#totalCollections").textContent = money(data.totals.collections);
   qs("#totalExpenses").textContent = money(data.totals.expenses);
@@ -1869,14 +1886,34 @@ async function removeRecord(kind, id) {
   ]);
 }
 
+function bindFormAction(selector, handler) {
+  const form = qs(selector);
+  if (!form) return;
+  form.addEventListener("submit", async (event) => {
+    const button = form.querySelector('button[type="submit"]');
+    const original = button?.innerHTML;
+    if (button) {
+      button.disabled = true;
+      button.classList.add("is-loading");
+      button.innerHTML = `<span class="button-spinner" aria-hidden="true"></span><span>جاري الحفظ...</span>`;
+    }
+    try {
+      await handler(event);
+    } catch (error) {
+      showToast(error.message, true);
+    } finally {
+      if (button) {
+        button.disabled = false;
+        button.classList.remove("is-loading");
+        button.innerHTML = original;
+      }
+    }
+  });
+}
+
 function bindEvents() {
   qsa(".tab").forEach((tab) => {
-    tab.addEventListener("click", () => {
-      qsa(".tab").forEach((item) => item.classList.remove("active"));
-      qsa(".tab-panel").forEach((item) => item.classList.remove("active"));
-      tab.classList.add("active");
-      qs(`#${tab.dataset.tab}`).classList.add("active");
-    });
+    tab.addEventListener("click", () => setActiveTab(tab.dataset.tab));
   });
 
   qsa(".report-tab").forEach((tab) => {
@@ -1953,14 +1990,14 @@ function bindEvents() {
     submitButton.textContent = "جاري الدخول...";
   });
 
-  qs("#collectionForm").addEventListener("submit", (event) => saveCollection(event).catch((error) => showToast(error.message, true)));
-  qs("#directSaleForm").addEventListener("submit", (event) => saveDirectSale(event).catch((error) => showToast(error.message, true)));
-  qs("#customerForm").addEventListener("submit", (event) => saveCustomer(event).catch((error) => showToast(error.message, true)));
-  qs("#supplyOrderForm").addEventListener("submit", (event) => saveSupplyOrder(event).catch((error) => showToast(error.message, true)));
-  qs("#deliveryNoteForm").addEventListener("submit", (event) => saveDeliveryNote(event).catch((error) => showToast(error.message, true)));
-  qs("#expenseForm").addEventListener("submit", (event) => saveExpense(event).catch((error) => showToast(error.message, true)));
-  qs("#transferForm").addEventListener("submit", (event) => saveTransfer(event).catch((error) => showToast(error.message, true)));
-  qs("#userForm").addEventListener("submit", (event) => saveUser(event).catch((error) => showToast(error.message, true)));
+  bindFormAction("#collectionForm", saveCollection);
+  bindFormAction("#directSaleForm", saveDirectSale);
+  bindFormAction("#customerForm", saveCustomer);
+  bindFormAction("#supplyOrderForm", saveSupplyOrder);
+  bindFormAction("#deliveryNoteForm", saveDeliveryNote);
+  bindFormAction("#expenseForm", saveExpense);
+  bindFormAction("#transferForm", saveTransfer);
+  bindFormAction("#userForm", saveUser);
   qs("#cancelCollectionEdit").addEventListener("click", resetCollectionForm);
   qs("#cancelExpenseEdit").addEventListener("click", resetExpenseForm);
   qs("#cancelTransferEdit").addEventListener("click", resetTransferForm);
