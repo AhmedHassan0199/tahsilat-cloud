@@ -23,6 +23,7 @@ const state = {
   expenseReport: null,
   collectionReport: null,
   responsibleMonthly: [],
+  dashboardFilters: { from: "", to: "", granularity: "month" },
   user: null,
 };
 
@@ -749,15 +750,22 @@ function renderDashboard() {
   const bestDay = data.insights.best_day;
   const bestResponsible = data.insights.best_responsible;
   const largestClient = data.insights.largest_client;
-  qs("#bestMonth").textContent = bestMonth ? `${monthName(bestMonth.month)} - ${money(bestMonth.total)}` : "-";
+  qs("#bestMonth").textContent = bestMonth ? `${bestMonth.period || monthName(bestMonth.month)} - ${money(bestMonth.total)}` : "-";
   qs("#bestDay").textContent = bestDay ? `${bestDay.entry_date} - ${money(bestDay.total)}` : "-";
   qs("#bestResponsible").textContent = bestResponsible ? `${bestResponsible.responsible} - ${money(bestResponsible.total)}` : "-";
   qs("#largestClient").textContent = largestClient ? `${largestClient.client_name} - ${money(largestClient.total)}` : "-";
 
-  qs("#monthlyTrendChart").innerHTML = monthlyTrendChart(data.by_month);
+  const granularity = data.filters?.granularity || "month";
+  qs("#trendTitle").textContent = granularity === "day" ? "الأداء اليومي" : "الأداء الشهري";
+  qs("#monthlyTrendChart").innerHTML = monthlyTrendChart(data.by_period || data.by_month, granularity);
+  bindChartTooltips(qs("#monthlyTrendChart"));
   qs("#responsibleDonutChart").innerHTML = donutChart(data.by_responsible, "responsible", "total");
   qs("#topClientsChart").innerHTML = barChart(data.top_clients, "client_name", "total", { limit: 8 });
   qs("#treasuryBalanceChart").innerHTML = barChart(data.treasury_by_method, "payment_method", "balance", { limit: 8, signed: true });
+  const summary = data.filters?.from || data.filters?.to
+    ? `${data.filters.from || "البداية"} — ${data.filters.to || "اليوم"}`
+    : "كل الفترات";
+  qs("#dashboardFilterSummary").textContent = summary;
 
   qs("#treasuryRows").innerHTML = data.treasury_by_method.map((row) => `
     <tr>
@@ -771,7 +779,7 @@ function renderDashboard() {
   `).join("");
 }
 
-function monthlyTrendChart(rows) {
+function monthlyTrendChart(rows, granularity = "month") {
   const data = rows || [];
   const width = 760;
   const height = 300;
@@ -794,7 +802,16 @@ function monthlyTrendChart(rows) {
     const points = data.map((row, index) => `${x(index)},${y(row[item.key])}`).join(" ");
     return `<polyline class="chart-line" points="${points}" stroke="${item.color}"/>`;
   }).join("");
-  const labels = data.map((row, index) => `<text class="chart-axis" x="${x(index)}" y="${height - 14}" text-anchor="middle">${monthName(row.month).replace("شهر ", "")}</text>`).join("");
+  const labels = data.map((row, index) => {
+    const period = row.period || row.month || "";
+    const label = granularity === "day" ? String(period).slice(5) : String(period).slice(0, 7);
+    return `<text class="chart-axis" x="${x(index)}" y="${height - 14}" text-anchor="middle">${escapeHtml(label)}</text>`;
+  }).join("");
+  const points = series.map((item) => data.map((row, index) => {
+    const period = row.period || row.month || "";
+    const tooltip = `${item.label} • ${period}: ${money(row[item.key])}`;
+    return `<circle class="chart-point" cx="${x(index)}" cy="${y(row[item.key])}" r="5" fill="${item.color}" tabindex="0" data-tooltip="${escapeHtml(tooltip)}"><title>${escapeHtml(tooltip)}</title></circle>`;
+  }).join("")).join("");
   const legend = series.map((item, index) => `
     <span class="chart-legend-item"><i style="background:${item.color}"></i>${item.label}</span>
   `).join("");
@@ -808,10 +825,38 @@ function monthlyTrendChart(rows) {
         return `<line class="chart-grid ${Math.abs(value) < 0.001 ? "" : "faint"}" x1="${pad.left}" y1="${ty}" x2="${width - pad.right}" y2="${ty}"/><text class="chart-axis" x="${pad.left - 8}" y="${ty + 4}" text-anchor="end">${money(value)}</text>`;
       }).join("")}
       ${lines}
+      ${points}
       ${labels}
     </svg>
     <div class="chart-legend">${legend}</div>
   `;
+}
+
+function bindChartTooltips(host) {
+  if (!host) return;
+  let tooltip = qs(".chart-tooltip", host);
+  if (!tooltip) {
+    tooltip = document.createElement("div");
+    tooltip.className = "chart-tooltip";
+    host.appendChild(tooltip);
+  }
+  const show = (point, clientX, clientY) => {
+    tooltip.textContent = point.dataset.tooltip || "";
+    tooltip.classList.add("show");
+    const rect = host.getBoundingClientRect();
+    tooltip.style.left = `${Math.max(8, Math.min(rect.width - tooltip.offsetWidth - 8, clientX - rect.left + 12))}px`;
+    tooltip.style.top = `${Math.max(8, clientY - rect.top - 42)}px`;
+  };
+  qsa(".chart-point", host).forEach((point) => {
+    point.addEventListener("pointerenter", (event) => show(point, event.clientX, event.clientY));
+    point.addEventListener("pointermove", (event) => show(point, event.clientX, event.clientY));
+    point.addEventListener("pointerleave", () => tooltip.classList.remove("show"));
+    point.addEventListener("focus", () => {
+      const rect = point.getBoundingClientRect();
+      show(point, rect.left + rect.width / 2, rect.top);
+    });
+    point.addEventListener("blur", () => tooltip.classList.remove("show"));
+  });
 }
 
 function donutChart(rows, labelKey, valueKey) {
@@ -1259,7 +1304,12 @@ async function loadBootstrap() {
 }
 
 async function loadDashboard() {
-  state.dashboard = await api("/api/dashboard");
+  const params = new URLSearchParams();
+  const filters = state.dashboardFilters;
+  if (filters.from) params.set("from", filters.from);
+  if (filters.to) params.set("to", filters.to);
+  params.set("granularity", filters.granularity);
+  state.dashboard = await api(`/api/dashboard?${params.toString()}`);
   renderDashboard();
 }
 
@@ -1932,6 +1982,24 @@ function bindEvents() {
   qs("#refreshBtn").addEventListener("click", async () => {
     await reloadAll();
     showToast("تم التحديث");
+  });
+
+  qs("#applyDashboardFilter").addEventListener("click", async () => {
+    const from = qs("#dashboardFrom").value;
+    const to = qs("#dashboardTo").value;
+    if (from && to && from > to) return showToast("تاريخ البداية يجب أن يسبق تاريخ النهاية", true);
+    state.dashboardFilters = { from, to, granularity: qs("#dashboardGranularity").value };
+    await loadDashboard();
+    showToast("تم تطبيق فلتر Dashboard");
+  });
+
+  qs("#resetDashboardFilter").addEventListener("click", async () => {
+    qs("#dashboardFrom").value = "";
+    qs("#dashboardTo").value = "";
+    qs("#dashboardGranularity").value = "month";
+    state.dashboardFilters = { from: "", to: "", granularity: "month" };
+    await loadDashboard();
+    showToast("تم عرض كل الفترات");
   });
 
   qs("#backupBtn").addEventListener("click", () => {

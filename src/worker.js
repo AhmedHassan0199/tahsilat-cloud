@@ -40,7 +40,7 @@ async function handleApi(request, env, url) {
   if (url.pathname === "/api/logout" && method === "POST") return logout(request, env, user);
   if (url.pathname === "/api/me" && method === "GET") return json({ user });
   if (url.pathname === "/api/bootstrap" && method === "GET") return bootstrap(env, user);
-  if (url.pathname === "/api/dashboard" && method === "GET") return dashboard(env);
+  if (url.pathname === "/api/dashboard" && method === "GET") return dashboard(env, url);
   if (url.pathname === "/api/collections" && method === "GET") return listCollections(env, url);
   if (url.pathname === "/api/collections" && method === "POST") return createCollection(request, env, user);
   if (url.pathname === "/api/direct-sales" && method === "POST") return createDirectSale(request, env, user);
@@ -340,70 +340,76 @@ async function bootstrap(env, user) {
   });
 }
 
-async function dashboard(env) {
+async function dashboard(env, url) {
+  const from = parseDateValue(url.searchParams.get("from"));
+  const to = parseDateValue(url.searchParams.get("to"));
+  const granularity = url.searchParams.get("granularity") === "day" ? "day" : "month";
+  if (from && to && from > to) throw new HttpError("تاريخ البداية يجب أن يسبق تاريخ النهاية", 400);
+  const where = (alias, column = "entry_date") => {
+    const clauses = [`${alias}.${column} IS NOT NULL`, `${alias}.${column} <> ''`];
+    const binds = [];
+    if (from) { clauses.push(`${alias}.${column} >= ?`); binds.push(from); }
+    if (to) { clauses.push(`${alias}.${column} <= ?`); binds.push(to); }
+    return { sql: clauses.join(" AND "), binds };
+  };
+  const cf = where("c");
+  const ef = where("e");
+  const tf = where("t");
   const totals = await env.DB.prepare(
     `SELECT
-      COALESCE((SELECT SUM(amount) FROM collections),0) AS collections,
-      COALESCE((SELECT SUM(amount) FROM expenses),0) AS expenses,
-      COALESCE((SELECT SUM(amount) FROM collections),0)
-        - COALESCE((SELECT SUM(amount) FROM expenses WHERE deducted_from_treasury=1),0) AS treasury,
-      (SELECT COUNT(*) FROM collections) AS collection_count,
-      (SELECT COUNT(*) FROM expenses) AS expense_count`
-  ).first();
-  const byMonth = await env.DB.prepare(
-    `WITH months(m) AS (VALUES (1),(2),(3),(4),(5),(6),(7),(8),(9),(10),(11),(12))
-     SELECT m AS month,
-       COALESCE((SELECT SUM(amount) FROM collections c WHERE c.month=m),0) AS collections,
-       COALESCE((SELECT SUM(amount) FROM expenses e WHERE e.month=m),0) AS expenses,
-       COALESCE((SELECT SUM(amount) FROM collections c WHERE c.month=m),0)
-       - COALESCE((SELECT SUM(amount) FROM expenses e WHERE e.month=m AND e.deducted_from_treasury=1),0) AS net
-     FROM months ORDER BY m`
-  ).all();
+      COALESCE((SELECT SUM(amount) FROM collections c WHERE ${cf.sql}),0) AS collections,
+      COALESCE((SELECT SUM(amount) FROM expenses e WHERE ${ef.sql}),0) AS expenses,
+      COALESCE((SELECT SUM(amount) FROM collections c WHERE ${cf.sql}),0)
+        - COALESCE((SELECT SUM(amount) FROM expenses e WHERE ${ef.sql} AND e.deducted_from_treasury=1),0) AS treasury,
+      (SELECT COUNT(*) FROM collections c WHERE ${cf.sql}) AS collection_count,
+      (SELECT COUNT(*) FROM expenses e WHERE ${ef.sql}) AS expense_count`
+  ).bind(...cf.binds, ...ef.binds, ...cf.binds, ...ef.binds, ...cf.binds, ...ef.binds).first();
+  const periodExprC = granularity === "day" ? "c.entry_date" : "SUBSTR(c.entry_date,1,7)";
+  const periodExprE = granularity === "day" ? "e.entry_date" : "SUBSTR(e.entry_date,1,7)";
+  const byPeriod = await env.DB.prepare(
+    `SELECT period, SUM(collections) AS collections, SUM(expenses) AS expenses, SUM(net) AS net
+     FROM (
+       SELECT ${periodExprC} AS period, c.amount AS collections, 0 AS expenses, c.amount AS net FROM collections c WHERE ${cf.sql}
+       UNION ALL
+       SELECT ${periodExprE} AS period, 0, e.amount, CASE WHEN e.deducted_from_treasury=1 THEN -e.amount ELSE 0 END FROM expenses e WHERE ${ef.sql}
+     ) GROUP BY period ORDER BY period`
+  ).bind(...cf.binds, ...ef.binds).all();
   const byResponsible = await env.DB.prepare(
     `SELECT responsible, COALESCE(SUM(amount),0) AS total, COUNT(*) AS count
-     FROM collections GROUP BY responsible ORDER BY total DESC`
-  ).all();
+     FROM collections c WHERE ${cf.sql} GROUP BY responsible ORDER BY total DESC`
+  ).bind(...cf.binds).all();
   const treasuryByMethod = await env.DB.prepare(
-    `WITH methods AS (
-      SELECT name FROM payment_methods WHERE active=1
-      UNION SELECT payment_method FROM collections
-      UNION SELECT payment_method FROM expenses
-      UNION SELECT source_method FROM transfers
-      UNION SELECT target_method FROM transfers
+    `WITH movements AS (
+      SELECT c.payment_method AS method, c.amount AS collections, 0 AS expenses, 0 AS transfers_in, 0 AS transfers_out FROM collections c WHERE ${cf.sql}
+      UNION ALL SELECT e.payment_method, 0, CASE WHEN e.deducted_from_treasury=1 THEN e.amount ELSE 0 END, 0, 0 FROM expenses e WHERE ${ef.sql}
+      UNION ALL SELECT t.target_method, 0, 0, t.amount, 0 FROM transfers t WHERE ${tf.sql}
+      UNION ALL SELECT t.source_method, 0, 0, 0, t.amount FROM transfers t WHERE ${tf.sql}
     )
-    SELECT name AS payment_method,
-      COALESCE((SELECT SUM(amount) FROM collections c WHERE c.payment_method=name),0) AS collections,
-      COALESCE((SELECT SUM(amount) FROM expenses e WHERE e.payment_method=name AND e.deducted_from_treasury=1),0) AS expenses,
-      COALESCE((SELECT SUM(amount) FROM transfers t WHERE t.target_method=name),0) AS transfers_in,
-      COALESCE((SELECT SUM(amount) FROM transfers t WHERE t.source_method=name),0) AS transfers_out,
-      COALESCE((SELECT SUM(amount) FROM collections c WHERE c.payment_method=name),0)
-      - COALESCE((SELECT SUM(amount) FROM expenses e WHERE e.payment_method=name AND e.deducted_from_treasury=1),0)
-      + COALESCE((SELECT SUM(amount) FROM transfers t WHERE t.target_method=name),0)
-      - COALESCE((SELECT SUM(amount) FROM transfers t WHERE t.source_method=name),0) AS balance
-    FROM methods ORDER BY balance DESC, name`
-  ).all();
+    SELECT method AS payment_method, SUM(collections) AS collections, SUM(expenses) AS expenses,
+      SUM(transfers_in) AS transfers_in, SUM(transfers_out) AS transfers_out,
+      SUM(collections)-SUM(expenses)+SUM(transfers_in)-SUM(transfers_out) AS balance
+    FROM movements WHERE method IS NOT NULL AND method <> '' GROUP BY method ORDER BY balance DESC, method`
+  ).bind(...cf.binds, ...ef.binds, ...tf.binds, ...tf.binds).all();
   const topClients = await env.DB.prepare(
-    `SELECT client_name, SUM(amount) AS total, COUNT(*) AS count
-     FROM collections GROUP BY client_name ORDER BY total DESC LIMIT 10`
-  ).all();
+    `SELECT client_name, SUM(amount) AS total, COUNT(*) AS count FROM collections c
+     WHERE ${cf.sql} GROUP BY client_name ORDER BY total DESC LIMIT 10`
+  ).bind(...cf.binds).all();
   const daily = await env.DB.prepare(
-    `SELECT entry_date, SUM(amount) AS total, COUNT(*) AS count
-     FROM collections
-     WHERE entry_date IS NOT NULL AND entry_date <> ''
-     GROUP BY entry_date ORDER BY entry_date DESC LIMIT 30`
-  ).all();
+    `SELECT entry_date, SUM(amount) AS total, COUNT(*) AS count FROM collections c
+     WHERE ${cf.sql} GROUP BY entry_date ORDER BY entry_date DESC LIMIT 30`
+  ).bind(...cf.binds).all();
   const bestDay = await env.DB.prepare(
-    `SELECT entry_date, SUM(amount) AS total FROM collections
-     WHERE entry_date IS NOT NULL AND entry_date <> ''
+    `SELECT entry_date, SUM(amount) AS total FROM collections c WHERE ${cf.sql}
      GROUP BY entry_date ORDER BY total DESC LIMIT 1`
-  ).first();
+  ).bind(...cf.binds).first();
   const bestMonth = await env.DB.prepare(
-    `SELECT month, SUM(amount) AS total FROM collections
-     WHERE month IS NOT NULL GROUP BY month ORDER BY total DESC LIMIT 1`
-  ).first();
+    `SELECT SUBSTR(entry_date,1,7) AS period, SUM(amount) AS total FROM collections c WHERE ${cf.sql}
+     GROUP BY period ORDER BY total DESC LIMIT 1`
+  ).bind(...cf.binds).first();
   return json({
     totals,
-    by_month: byMonth.results,
+    by_period: byPeriod.results,
+    by_month: byPeriod.results,
     by_responsible: byResponsible.results,
     treasury_by_method: treasuryByMethod.results,
     top_clients: topClients.results,
@@ -414,6 +420,7 @@ async function dashboard(env) {
       largest_client: topClients.results[0] || null,
       best_responsible: byResponsible.results[0] || null,
     },
+    filters: { from, to, granularity },
   });
 }
 

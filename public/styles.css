@@ -280,6 +280,20 @@ main {
   gap: 14px;
 }
 
+.dashboard-filters {
+  display: flex;
+  align-items: end;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 14px;
+  padding: 12px 14px;
+}
+
+.dashboard-filters > div { display: grid; gap: 3px; margin-inline-end: auto; }
+.dashboard-filters label { display: grid; gap: 5px; color: var(--muted); font-size: 12px; }
+.dashboard-filters input,
+.dashboard-filters select { min-width: 145px; }
+
 .dashboard-wide {
   grid-column: 1 / -1;
 }
@@ -324,6 +338,7 @@ h2 {
 .chart {
   min-height: 280px;
   padding: 14px;
+  position: relative;
 }
 
 .chart-large {
@@ -335,6 +350,35 @@ h2 {
   width: 100%;
   height: auto;
 }
+
+.chart-point {
+  cursor: crosshair;
+  stroke: #fff;
+  stroke-width: 2;
+  transition: r .16s ease, filter .16s ease;
+}
+
+.chart-point:hover,
+.chart-point:focus { r: 8; filter: drop-shadow(0 3px 5px rgba(16,24,40,.3)); outline: none; }
+
+.chart-tooltip {
+  position: absolute;
+  z-index: 5;
+  direction: rtl;
+  pointer-events: none;
+  padding: 7px 10px;
+  border-radius: 7px;
+  background: #101828;
+  color: #fff;
+  font-size: 12px;
+  white-space: nowrap;
+  opacity: 0;
+  transform: translateY(5px);
+  transition: opacity .14s ease, transform .14s ease;
+  box-shadow: 0 8px 18px rgba(16,24,40,.22);
+}
+
+.chart-tooltip.show { opacity: 1; transform: none; }
 
 .chart-line {
   fill: none;

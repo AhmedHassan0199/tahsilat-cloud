@@ -74,10 +74,21 @@
       </nav>
 
       <section id="dashboard" class="tab-panel active">
+        <div class="dashboard-filters panel">
+          <div>
+            <strong>الفترة الزمنية</strong>
+            <span id="dashboardFilterSummary" class="muted">كل الفترات</span>
+          </div>
+          <label>العرض<select id="dashboardGranularity"><option value="month">شهري</option><option value="day">يومي</option></select></label>
+          <label>من<input id="dashboardFrom" type="date"></label>
+          <label>إلى<input id="dashboardTo" type="date"></label>
+          <button id="applyDashboardFilter" type="button">تطبيق</button>
+          <button id="resetDashboardFilter" class="secondary" type="button">كل الفترات</button>
+        </div>
         <div class="dashboard-grid">
           <div class="panel">
             <div class="panel-head">
-              <h2>الأداء الشهري</h2>
+              <h2 id="trendTitle">الأداء الشهري</h2>
             </div>
             <div id="monthlyTrendChart" class="chart chart-large"></div>
           </div>
