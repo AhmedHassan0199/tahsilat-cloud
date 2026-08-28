@@ -266,9 +266,9 @@ function applyRolePermissions() {
   qs("#backupBtn")?.classList.remove("hidden");
   qs("#collectionModeTabs")?.classList.toggle("hidden", !(isAdmin() || collector));
 
-  const forms = ["collectionForm", "directSaleForm", "customerForm", "supplyOrderForm", "deliveryNoteForm", "invoiceForm", "expenseForm", "methodForm", "transferForm", "userForm"];
+  const forms = ["collectionForm", "directSaleForm", "giftForm", "customerForm", "supplyOrderForm", "deliveryNoteForm", "invoiceForm", "expenseForm", "methodForm", "transferForm", "userForm"];
   forms.forEach((id) => {
-    const allowed = isAdmin() || (collector && ["collectionForm", "directSaleForm", "supplyOrderForm", "deliveryNoteForm"].includes(id)) || (invoiceIssuer && id === "invoiceForm");
+    const allowed = isAdmin() || (collector && ["collectionForm", "directSaleForm", "giftForm", "supplyOrderForm", "deliveryNoteForm"].includes(id)) || (invoiceIssuer && id === "invoiceForm");
     qs(`#${id}`)?.classList.toggle("hidden", !allowed);
   });
   if (isAdmin() || collector) setCollectionMode("normal");
@@ -281,7 +281,7 @@ function applyRolePermissions() {
 }
 
 function setCollectionMode(mode) {
-  const selected = mode === "direct" ? "direct" : "normal";
+  const selected = ["normal", "direct", "gift"].includes(mode) ? mode : "normal";
   qsa(".collection-mode-tab").forEach((tab) => {
     const active = tab.dataset.collectionMode === selected;
     tab.classList.toggle("active", active);
@@ -1042,7 +1042,7 @@ function renderDeliveryNotes() {
     <tr>
       <td data-label="رقم">${item.id}</td>
       <td data-label="التاريخ">${item.delivery_date || "-"}</td>
-      <td data-label="العميل">${item.customer_name || "-"}</td>
+      <td data-label="العميل">${item.customer_name || "-"} ${item.transaction_type === "gift" ? `<span class="gift-badge">هدية</span>` : ""}</td>
       <td data-label="عدد الأصناف">${money(item.item_count)}</td>
       <td data-label="إجمالي العدد">${money(item.total_quantity)}</td>
       <td data-label="المستخدم">${item.created_by_name || "-"}</td>
@@ -1066,7 +1066,7 @@ function renderInvoices() {
       <td data-label="إذن التسليم">#${item.delivery_note_id}</td>
       <td data-label="العميل">${item.customer_name || "-"}</td>
       <td data-label="الأصناف">${money(item.item_count)}</td>
-      <td data-label="الإجمالي">${money(item.total)}</td>
+      <td data-label="الإجمالي">${money(item.total)} ${item.transaction_type === "gift" ? `<span class="gift-badge">مجانية</span>` : ""}</td>
       <td data-label="المستخدم">${item.created_by_name || "-"}</td>
       <td class="actions">
         ${isAdmin() ? `<button type="button" data-edit-invoice="${item.id}" title="تعديل">✎</button>` : ""}
@@ -1489,6 +1489,24 @@ function fillDirectSaleForm() {
   toggleDirectSaleCustomer();
 }
 
+function fillGiftForm() {
+  const form = qs("#giftForm");
+  if (!form) return;
+  fillCustomerSelect(form.customer_id, form.customer_id.value);
+  fillExistingLookupSelect(form.design_id, state.designs, "اختر التصميم", form.design_id.value);
+  fillExistingLookupSelect(form.size_id, state.productSizes, "اختر المقاس", form.size_id.value);
+  toggleGiftCustomer();
+}
+
+function toggleGiftCustomer() {
+  const form = qs("#giftForm");
+  if (!form) return;
+  const existing = Boolean(form.customer_id.value);
+  qs("#giftManualCustomerWrap")?.classList.toggle("hidden", existing);
+  qs("#giftSaveCustomerWrap")?.classList.toggle("hidden", existing);
+  form.manual_customer_name.required = !existing;
+}
+
 function toggleDirectSaleCustomer() {
   const form = qs("#directSaleForm");
   if (!form) return;
@@ -1519,6 +1537,26 @@ async function saveDirectSale(event) {
   showToast(`تم إصدار الفاتورة #${result.invoice_id} وتسجيل التحصيل`);
   await Promise.all([loadBootstrap(), loadCollections(), loadDeliveryNotes(), loadInvoices()]);
   if (isAdmin()) await Promise.all([loadDashboard(), loadCustomers(), loadAudit()]);
+}
+
+async function saveGift(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const raw = formData(form);
+  const payload = {
+    entry_date: raw.entry_date,
+    customer_id: raw.customer_id,
+    manual_customer_name: raw.manual_customer_name,
+    save_customer: raw.save_customer,
+    note: raw.note,
+    items: [{ product_type: raw.product_type, design_id: raw.design_id, size_id: raw.size_id, quantity_unit: raw.quantity_unit, quantity_amount: raw.quantity_amount }],
+  };
+  const result = await api("/api/gifts", { method: "POST", body: JSON.stringify(payload) });
+  form.reset();
+  fillGiftForm();
+  showToast(`تم إصدار فاتورة الهدية #${result.invoice_id} بقيمة صفر`);
+  await Promise.all([loadBootstrap(), loadDeliveryNotes(), loadInvoices()]);
+  if (isAdmin()) await Promise.all([loadCustomers(), loadAudit()]);
 }
 
 function resetExpenseForm() {
@@ -1554,6 +1592,7 @@ function resetDeliveryNoteForm() {
   state.deliveryDraft = { index: 0, items: [blankDeliveryItem()] };
   fillDeliveryNoteFormLookups();
   fillDirectSaleForm();
+  fillGiftForm();
   showDeliveryItem(0);
 }
 
@@ -2062,6 +2101,7 @@ function bindEvents() {
 
   bindFormAction("#collectionForm", saveCollection);
   bindFormAction("#directSaleForm", saveDirectSale);
+  bindFormAction("#giftForm", saveGift);
   bindFormAction("#customerForm", saveCustomer);
   bindFormAction("#supplyOrderForm", saveSupplyOrder);
   bindFormAction("#deliveryNoteForm", saveDeliveryNote);
@@ -2128,6 +2168,12 @@ function bindEvents() {
     const covers = event.target.value === "غطيان";
     qs("#directDesignWrap").classList.toggle("hidden", covers);
     qs('#directSaleForm select[name="design_id"]').required = !covers;
+  });
+  qs('#giftForm select[name="customer_id"]').addEventListener("change", toggleGiftCustomer);
+  qs('#giftForm select[name="product_type"]').addEventListener("change", (event) => {
+    const covers = event.target.value === "غطيان";
+    qs("#giftDesignWrap").classList.toggle("hidden", covers);
+    qs('#giftForm select[name="design_id"]').required = !covers;
   });
   qs("#expenseSearch").addEventListener("input", debounce(loadExpenses, 250));
   qs("#expenseMonth").addEventListener("change", loadExpenses);

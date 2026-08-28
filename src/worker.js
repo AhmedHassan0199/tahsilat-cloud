@@ -44,6 +44,7 @@ async function handleApi(request, env, url) {
   if (url.pathname === "/api/collections" && method === "GET") return listCollections(env, url);
   if (url.pathname === "/api/collections" && method === "POST") return createCollection(request, env, user);
   if (url.pathname === "/api/direct-sales" && method === "POST") return createDirectSale(request, env, user);
+  if (url.pathname === "/api/gifts" && method === "POST") return createGift(request, env, user);
   if (url.pathname.startsWith("/api/collections/")) {
     const id = idFromPath(url.pathname);
     if (method === "PUT") return updateCollection(request, env, user, id);
@@ -120,7 +121,7 @@ function authorizeApiRequest(user, pathname, method) {
       ["/api/me", "/api/bootstrap", "/api/collections", "/api/supply-orders", "/api/delivery-notes", "/api/invoices", "/api/customer-statement", "/api/customer-statement.xlsx", "/api/backup"].includes(pathname)
       || /^\/api\/(supply-orders|delivery-notes|invoices)\/\d+\.xlsx$/.test(pathname)
     );
-    const canInsert = method === "POST" && ["/api/collections", "/api/supply-orders", "/api/delivery-notes", "/api/direct-sales"].includes(pathname);
+    const canInsert = method === "POST" && ["/api/collections", "/api/supply-orders", "/api/delivery-notes", "/api/direct-sales", "/api/gifts"].includes(pathname);
     if (canRead || canInsert) return;
   }
   if (role === "planner") {
@@ -936,7 +937,7 @@ async function deliveryNoteXlsxResponse(env, id) {
   if (!note) throw new HttpError("Record not found", 404);
   const rows = [];
   const addRow = (values, style = "normal", mergeAcross = 0) => rows.push({ values, style, mergeAcross });
-  addRow(["إذن تسليم"], "title", 6);
+  addRow([note.transaction_type === "gift" ? "إذن تسليم - هدية / بضاعة مجانية" : "إذن تسليم"], "title", 6);
   addRow(["رقم الإذن", note.id, "التاريخ", note.delivery_date || "", "العميل", note.customer_name || ""], "meta");
   addRow(["", "", "", "", "", ""], "normal");
   addRow(["#", "الصنف", "التصميم", "المقاس", "العدد", "ملاحظة"], "header");
@@ -1094,7 +1095,7 @@ async function invoiceXlsxResponse(env, id) {
   if (!invoice) throw new HttpError("Record not found", 404);
   const rows = [];
   const addRow = (values, style = "normal", mergeAcross = 0) => rows.push({ values, style, mergeAcross });
-  addRow(["فاتورة"], "title", 8);
+  addRow([invoice.transaction_type === "gift" ? "فاتورة هدية / بضاعة مجانية" : "فاتورة"], "title", 8);
   addRow(["رقم الفاتورة", invoice.id, "التاريخ", invoice.invoice_date || "", "العميل", invoice.customer_name || "", "إذن التسليم", invoice.delivery_note_id], "meta");
   addRow(["", "", "", "", "", "", "", ""], "normal");
   addRow(["#", "الصنف", "التصميم", "المقاس", "العدد", "أمر التوريد", "السعر", "الإجمالي"], "header");
@@ -1329,6 +1330,70 @@ async function createDirectSale(request, env, user) {
   const created = await env.DB.prepare("SELECT id,invoice_id,delivery_note_id,amount FROM collections WHERE transaction_token=?").bind(token).first();
   await insertAudit(env, request, user, "INSERT", "direct_sales", created?.id, null, { ...created, customer_name: customerName, item_count: items.length });
   return json(created);
+}
+
+async function createGift(request, env, user) {
+  if (!["admin", "collector"].includes(effectiveRole(user))) throw new HttpError("ليس لديك صلاحية لتسجيل الهدية", 403);
+  const payload = await readJson(request);
+  const entryDate = parseDateValue(payload.entry_date) || new Date().toISOString().slice(0, 10);
+  const userNote = String(payload.note || "").trim();
+  const note = userNote ? `هدية / بضاعة مجانية - ${userNote}` : "هدية / بضاعة مجانية";
+  const token = crypto.randomUUID();
+  let customer = null;
+  let customerKey = "";
+  let customerName = "";
+  const customerId = Number(payload.customer_id || 0) || null;
+  if (customerId) {
+    customer = await env.DB.prepare("SELECT id,name,normalized_name FROM customers WHERE id=? AND active=1").bind(customerId).first();
+    if (!customer) throw new HttpError("العميل غير صحيح", 400);
+    customerName = customer.name;
+    customerKey = customer.normalized_name;
+  } else {
+    customerName = normalizeCustomerName(payload.manual_customer_name);
+    if (!customerName) throw new HttpError("اسم العميل مطلوب", 400);
+    const saveCustomer = truthy(payload.save_customer);
+    const normalKey = normalizedCustomerKey(customerName);
+    const existing = await env.DB.prepare("SELECT id,name,normalized_name FROM customers WHERE normalized_name=?").bind(normalKey).first();
+    if (existing && saveCustomer) {
+      customer = existing;
+      customerName = existing.name;
+      customerKey = existing.normalized_name;
+    } else {
+      customerKey = saveCustomer ? normalKey : `${normalKey}#هدية#${token}`;
+    }
+  }
+  const rawItems = Array.isArray(payload.items) ? payload.items : [];
+  if (!rawItems.length) throw new HttpError("يجب إضافة صنف واحد على الأقل", 400);
+  const items = [];
+  for (let index = 0; index < rawItems.length; index += 1) {
+    const raw = rawItems[index];
+    const productType = ["كوبايات - علب", "غطيان"].includes(raw.product_type) ? raw.product_type : "";
+    const designId = Number(raw.design_id || 0) || null;
+    const sizeId = Number(raw.size_id || 0) || null;
+    const quantityUnit = ["كيلو", "كرتونه"].includes(raw.quantity_unit) ? raw.quantity_unit : "كرتونه";
+    const quantity = Number(raw.quantity_amount || 0);
+    if (!productType || !sizeId || !Number.isFinite(quantity) || quantity <= 0) throw new HttpError(`بيانات الصنف ${index + 1} غير صحيحة`, 400);
+    const design = productType === "غطيان" ? { id: null, name: "" } : await env.DB.prepare("SELECT id,name FROM designs WHERE id=? AND active=1").bind(designId).first();
+    const size = await env.DB.prepare("SELECT id,name FROM product_sizes WHERE id=? AND active=1").bind(sizeId).first();
+    if (!design || !size) throw new HttpError(`التصميم أو المقاس غير صحيح في الصنف ${index + 1}`, 400);
+    items.push({ line_no: index + 1, product_type: productType, design_id: design.id, design_name: design.name, size_id: size.id, size_name: size.name, quantity_unit: quantityUnit, quantity_amount: quantity, note: String(raw.note || "").trim() || null });
+  }
+  const now = nowIso();
+  const statements = [];
+  if (!customer) statements.push(env.DB.prepare("INSERT INTO customers(name,normalized_name,active,is_transient,created_at,updated_at) VALUES(?,?,?,?,?,?)")
+    .bind(customerName, customerKey, truthy(payload.save_customer) ? 1 : 0, truthy(payload.save_customer) ? 0 : 1, now, now));
+  statements.push(env.DB.prepare(`INSERT INTO delivery_notes(delivery_date,customer_id,customer_name,note,created_by,created_at,updated_at,transaction_type,transaction_token)
+    VALUES(?,(SELECT id FROM customers WHERE normalized_name=?),?,?,?,?,?,'gift',?)`).bind(entryDate, customerKey, customerName, note, user.id, now, now, token));
+  for (const item of items) statements.push(env.DB.prepare(`INSERT INTO delivery_note_items(delivery_note_id,line_no,product_type,design_id,design_name,size_id,size_name,quantity_unit,quantity_amount,note)
+    VALUES((SELECT id FROM delivery_notes WHERE transaction_token=?),?,?,?,?,?,?,?,?,?)`).bind(token, item.line_no, item.product_type, item.design_id, item.design_name, item.size_id, item.size_name, item.quantity_unit, item.quantity_amount, item.note));
+  statements.push(env.DB.prepare(`INSERT INTO invoices(invoice_date,delivery_note_id,customer_id,customer_name,subtotal,delivery_charge,total,note,created_by,created_at,updated_at,transaction_type,payment_status,transaction_token)
+    VALUES(?,(SELECT id FROM delivery_notes WHERE transaction_token=?),(SELECT id FROM customers WHERE normalized_name=?),?,0,0,0,?,?,?,?,'gift','not_applicable',?)`).bind(entryDate, token, customerKey, customerName, note, user.id, now, now, token));
+  for (const item of items) statements.push(env.DB.prepare(`INSERT INTO invoice_items(invoice_id,delivery_note_item_id,line_no,product_type,design_id,design_name,size_id,size_name,quantity_unit,quantity_amount,supply_order_id,price_type,unit_price,line_total)
+    VALUES((SELECT id FROM invoices WHERE transaction_token=?),(SELECT id FROM delivery_note_items WHERE delivery_note_id=(SELECT id FROM delivery_notes WHERE transaction_token=?) AND line_no=?),?,?,?,?,?,?,?,?,NULL,'gift',0,0)`).bind(token, token, item.line_no, item.line_no, item.product_type, item.design_id, item.design_name, item.size_id, item.size_name, item.quantity_unit, item.quantity_amount));
+  await env.DB.batch(statements);
+  const created = await env.DB.prepare("SELECT id,delivery_note_id,total FROM invoices WHERE transaction_token=?").bind(token).first();
+  await insertAudit(env, request, user, "INSERT", "gifts", created?.id, null, { ...created, customer_name: customerName, item_count: items.length });
+  return json({ invoice_id: created?.id, delivery_note_id: created?.delivery_note_id, total: 0 });
 }
 
 async function createCollection(request, env, user) {
