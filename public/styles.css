@@ -867,6 +867,47 @@ label.check input {
   border-bottom: 1px solid var(--line);
 }
 
+.page-action-tabs {
+  display: flex;
+  gap: 8px;
+  margin: 0 0 16px;
+  padding: 6px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #eaf3e8;
+  box-shadow: 0 4px 14px rgba(31, 111, 36, .06);
+}
+
+.page-action-tab {
+  flex: 1;
+  min-height: 46px;
+  background: transparent;
+  color: var(--muted);
+  border-radius: 8px;
+  transition: background-color .2s ease, color .2s ease, box-shadow .2s ease, transform .2s ease;
+}
+
+.page-action-tab:hover {
+  color: var(--primary-dark);
+  transform: translateY(-1px);
+}
+
+.page-action-tab.active {
+  color: #fff;
+  background: var(--primary);
+  box-shadow: 0 5px 14px rgba(47, 155, 52, .24);
+}
+
+.tab-panel[data-page-view="entry"] [data-page-pane="display"],
+.tab-panel[data-page-view="display"] [data-page-pane="entry"] {
+  display: none !important;
+}
+
+.tab-panel[data-page-view] .entry-layout,
+.tab-panel[data-page-view] .grid.two {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 .report-tab {
   color: var(--ink);
   background: transparent;

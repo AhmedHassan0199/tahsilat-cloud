@@ -125,13 +125,17 @@
       </section>
 
       <section id="collections" class="tab-panel">
-        <div id="collectionModeTabs" class="collection-mode-tabs" role="tablist" aria-label="نوع عملية التحصيل">
+        <div class="page-action-tabs" role="tablist" aria-label="عرض التحصيلات">
+          <button class="page-action-tab active" data-page-mode="entry" type="button">إضافة جديد</button>
+          <button class="page-action-tab" data-page-mode="display" type="button">عرض وإدارة السجلات</button>
+        </div>
+        <div id="collectionModeTabs" class="collection-mode-tabs" data-page-pane="entry" role="tablist" aria-label="نوع عملية التحصيل">
           <button class="collection-mode-tab active" data-collection-mode="normal" type="button" role="tab" aria-selected="true">تحصيل عادي</button>
           <button class="collection-mode-tab" data-collection-mode="direct" type="button" role="tab" aria-selected="false">بيع نقدي مباشر</button>
           <button class="collection-mode-tab" data-collection-mode="gift" type="button" role="tab" aria-selected="false">هدية / بضاعة مجانية</button>
         </div>
         <div class="entry-layout">
-          <form id="collectionForm" class="form-panel collection-mode-panel" data-collection-panel="normal">
+          <form id="collectionForm" class="form-panel collection-mode-panel" data-page-pane="entry" data-collection-panel="normal">
             <h2 id="collectionFormTitle">إضافة تحصيل</h2>
             <input type="hidden" name="id">
             <label>التاريخ<input name="entry_date" type="date"></label>
@@ -149,7 +153,7 @@
               <button type="button" class="secondary" id="cancelCollectionEdit">إلغاء</button>
             </div>
           </form>
-          <form id="directSaleForm" class="form-panel collection-mode-panel hidden" data-collection-panel="direct">
+          <form id="directSaleForm" class="form-panel collection-mode-panel hidden" data-page-pane="entry" data-collection-panel="direct">
             <h2>بيع نقدي مباشر بدون أمر توريد</h2>
             <p class="muted section-note">ينشئ إذن تسليم وفاتورة مدفوعة وتحصيلًا واحدًا مترابطًا.</p>
             <label>التاريخ<input name="entry_date" type="date"></label>
@@ -168,7 +172,7 @@
             <label class="wide">ملاحظة<textarea name="note" rows="2"></textarea></label>
             <div class="form-actions"><button type="submit">إصدار الفاتورة وتسجيل التحصيل</button></div>
           </form>
-          <form id="giftForm" class="form-panel collection-mode-panel hidden" data-collection-panel="gift">
+          <form id="giftForm" class="form-panel collection-mode-panel hidden" data-page-pane="entry" data-collection-panel="gift">
             <h2>هدية / بضاعة مجانية</h2>
             <p class="muted section-note">ينشئ إذن تسليم وفاتورة صفرية دون تحصيل أو تأثير على الخزينة.</p>
             <label>التاريخ<input name="entry_date" type="date"></label>
@@ -183,7 +187,7 @@
             <label class="wide">ملاحظة<textarea name="note" rows="2"></textarea></label>
             <div class="form-actions"><button type="submit">إصدار إذن وفاتورة هدية</button></div>
           </form>
-          <div class="panel">
+          <div class="panel" data-page-pane="display">
             <div class="panel-head">
               <h2>سجل التحصيلات</h2>
               <div class="filters">
@@ -204,14 +208,15 @@
       </section>
 
       <section id="customers" class="tab-panel">
+        <div class="page-action-tabs" role="tablist" aria-label="عرض العملاء"><button class="page-action-tab active" data-page-mode="entry" type="button">إضافة جديد</button><button class="page-action-tab" data-page-mode="display" type="button">عرض وإدارة السجلات</button></div>
         <div class="entry-layout">
-          <form id="customerForm" class="form-panel">
+          <form id="customerForm" class="form-panel" data-page-pane="entry">
             <h2>إضافة عميل جديد</h2>
             <p class="muted section-note">أضف العميل مرة واحدة ليظهر في جميع التحصيلات وأوامر التوريد وأذونات التسليم والتقارير.</p>
             <label>اسم العميل<input name="name" required autocomplete="off"></label>
             <div class="form-actions"><button type="submit">إضافة</button></div>
           </form>
-          <div class="panel">
+          <div class="panel" data-page-pane="display">
             <div class="panel-head customer-directory-head">
               <div>
                 <h2>دليل العملاء الحاليين</h2>
@@ -230,8 +235,9 @@
       </section>
 
       <section id="supplyOrders" class="tab-panel">
+        <div class="page-action-tabs" role="tablist" aria-label="عرض أوامر التوريد"><button class="page-action-tab active" data-page-mode="entry" type="button">إضافة جديد</button><button class="page-action-tab" data-page-mode="display" type="button">عرض وإدارة السجلات</button></div>
         <div class="entry-layout supply-layout">
-          <form id="supplyOrderForm" class="form-panel">
+          <form id="supplyOrderForm" class="form-panel" data-page-pane="entry">
             <h2 id="supplyOrderFormTitle">أمر التوريد</h2>
             <input type="hidden" name="id">
             <label>التاريخ<input name="order_date" type="date"></label>
@@ -269,8 +275,8 @@
               <button type="button" class="secondary" id="cancelSupplyOrderEdit">إلغاء</button>
             </div>
           </form>
-          <div class="panel">
-            <div class="panel-head"><h2>أوامر التوريد المسجلة</h2></div>
+          <div class="panel" data-page-pane="display">
+            <div class="panel-head"><h2>أوامر التوريد المسجلة</h2><div class="filters"><select id="supplyOrderCustomerFilter"><option value="">كل العملاء</option></select></div></div>
             <div class="table-wrap records">
               <table>
                 <thead><tr><th>رقم</th><th>التاريخ</th><th>العميل</th><th>التصميم</th><th>المقاس</th><th>الخامة</th><th>الكمية</th><th>السعر</th><th>سعر السريل</th><th>تاريخ التوريد</th><th>المستخدم</th><th></th></tr></thead>
@@ -282,8 +288,9 @@
       </section>
 
       <section id="deliveryNotes" class="tab-panel">
+        <div class="page-action-tabs" role="tablist" aria-label="عرض أذونات التسليم"><button class="page-action-tab active" data-page-mode="entry" type="button">إضافة جديد</button><button class="page-action-tab" data-page-mode="display" type="button">عرض وإدارة السجلات</button></div>
         <div class="entry-layout supply-layout">
-          <form id="deliveryNoteForm" class="form-panel" novalidate>
+          <form id="deliveryNoteForm" class="form-panel" data-page-pane="entry" novalidate>
             <h2 id="deliveryNoteFormTitle">إذن التسليم</h2>
             <input type="hidden" name="id">
             <label>التاريخ<input name="delivery_date" type="date"></label>
@@ -314,15 +321,15 @@
             </div>
           </form>
           <div class="panel">
-            <div class="panel-head"><h2>الأصناف داخل الإذن</h2></div>
-            <div class="table-wrap records">
+            <div class="panel-head" data-page-pane="entry"><h2>الأصناف داخل الإذن</h2></div>
+            <div class="table-wrap records" data-page-pane="entry">
               <table>
                 <thead><tr><th>#</th><th>الصنف</th><th>التصميم</th><th>المقاس</th><th>العدد</th><th>ملاحظة</th></tr></thead>
                 <tbody id="deliveryDraftRows"></tbody>
               </table>
             </div>
-            <div class="panel-head"><h2>أذونات التسليم المسجلة</h2></div>
-            <div class="table-wrap records">
+            <div class="panel-head" data-page-pane="display"><h2>أذونات التسليم المسجلة</h2><div class="filters"><select id="deliveryNoteCustomerFilter"><option value="">كل العملاء</option></select></div></div>
+            <div class="table-wrap records" data-page-pane="display">
               <table>
                 <thead><tr><th>رقم</th><th>التاريخ</th><th>العميل</th><th>عدد الأصناف</th><th>إجمالي العدد</th><th>المستخدم</th><th></th></tr></thead>
                 <tbody id="deliveryNoteRows"></tbody>
@@ -333,8 +340,9 @@
       </section>
 
       <section id="invoices" class="tab-panel">
+        <div class="page-action-tabs" role="tablist" aria-label="عرض الفواتير"><button class="page-action-tab active" data-page-mode="entry" type="button">إضافة جديد</button><button class="page-action-tab" data-page-mode="display" type="button">عرض وإدارة السجلات</button></div>
         <div class="entry-layout supply-layout">
-          <form id="invoiceForm" class="form-panel">
+          <form id="invoiceForm" class="form-panel" data-page-pane="entry">
             <h2 id="invoiceFormTitle">إصدار فاتورة</h2>
             <input type="hidden" name="id">
             <label>تاريخ الفاتورة<input name="invoice_date" type="date"></label>
@@ -344,8 +352,8 @@
             <div id="invoiceItemEditor" class="invoice-items"></div>
             <div class="form-actions"><button class="primary-wide" type="button" id="reviewInvoiceBtn">مراجعة الفاتورة</button></div>
           </form>
-          <div class="panel">
-            <div class="panel-head"><h2>الفواتير المسجلة</h2></div>
+          <div class="panel" data-page-pane="display">
+            <div class="panel-head"><h2>الفواتير المسجلة</h2><div class="filters"><select id="invoiceCustomerFilter"><option value="">كل العملاء</option></select></div></div>
             <div class="table-wrap records">
               <table>
                 <thead><tr><th>رقم</th><th>التاريخ</th><th>إذن التسليم</th><th>العميل</th><th>الأصناف</th><th>الإجمالي</th><th>المستخدم</th><th></th></tr></thead>
@@ -396,8 +404,9 @@
       </section>
 
       <section id="expenses" class="tab-panel">
+        <div class="page-action-tabs" role="tablist" aria-label="عرض المصروفات"><button class="page-action-tab active" data-page-mode="entry" type="button">إضافة جديد</button><button class="page-action-tab" data-page-mode="display" type="button">عرض وإدارة السجلات</button></div>
         <div class="entry-layout">
-          <form id="expenseForm" class="form-panel">
+          <form id="expenseForm" class="form-panel" data-page-pane="entry">
             <h2 id="expenseFormTitle">إضافة مصروف</h2>
             <input type="hidden" name="id">
             <label>التاريخ<input name="entry_date" type="date"></label>
@@ -413,7 +422,7 @@
               <button type="button" class="secondary" id="cancelExpenseEdit">إلغاء</button>
             </div>
           </form>
-          <div class="panel">
+          <div class="panel" data-page-pane="display">
             <div class="panel-head">
               <h2>سجل المصروفات</h2>
               <div class="filters">
@@ -434,8 +443,9 @@
       </section>
 
       <section id="treasury" class="tab-panel">
+        <div class="page-action-tabs" role="tablist" aria-label="عرض الخزينة"><button class="page-action-tab active" data-page-mode="entry" type="button">إضافة طريقة دفع</button><button class="page-action-tab" data-page-mode="display" type="button">عرض أرصدة الخزينة</button></div>
         <div class="grid two">
-          <div class="panel">
+          <div class="panel" data-page-pane="display">
             <div class="panel-head"><h2>رصيد الخزينة حسب طريقة الدفع</h2></div>
             <div class="table-wrap records">
               <table>
@@ -444,7 +454,7 @@
               </table>
             </div>
           </div>
-          <form id="methodForm" class="form-panel compact">
+          <form id="methodForm" class="form-panel compact" data-page-pane="entry">
             <h2>إضافة طريقة دفع</h2>
             <label>الاسم<input name="name" required></label>
             <label>ملاحظة<input name="note"></label>
@@ -520,8 +530,9 @@
       </section>
 
       <section id="transfers" class="tab-panel">
+        <div class="page-action-tabs" role="tablist" aria-label="عرض التوسيط"><button class="page-action-tab active" data-page-mode="entry" type="button">إضافة جديد</button><button class="page-action-tab" data-page-mode="display" type="button">عرض وإدارة السجلات</button></div>
         <div class="entry-layout">
-          <form id="transferForm" class="form-panel">
+          <form id="transferForm" class="form-panel" data-page-pane="entry">
             <h2 id="transferFormTitle">توسيط بين طرق الدفع</h2>
             <input type="hidden" name="id">
             <label>التاريخ<input name="entry_date" type="date"></label>
@@ -536,7 +547,7 @@
               <button type="button" class="secondary" id="cancelTransferEdit">إلغاء</button>
             </div>
           </form>
-          <div class="panel">
+          <div class="panel" data-page-pane="display">
             <div class="panel-head"><h2>سجل التوسيط</h2></div>
             <div class="table-wrap records">
               <table>
@@ -549,8 +560,9 @@
       </section>
 
       <section id="users" class="tab-panel">
+        <div class="page-action-tabs" role="tablist" aria-label="عرض المستخدمين"><button class="page-action-tab active" data-page-mode="entry" type="button">إضافة جديد</button><button class="page-action-tab" data-page-mode="display" type="button">عرض المستخدمين</button></div>
         <div class="entry-layout">
-          <form id="userForm" class="form-panel admin-only">
+          <form id="userForm" class="form-panel admin-only" data-page-pane="entry">
             <h2>إنشاء مستخدم</h2>
             <label>اسم المستخدم<input name="username" required autocomplete="off"></label>
             <label>الاسم الكامل<input name="display_name" required autocomplete="off"></label>
@@ -558,7 +570,7 @@
             <label>الصلاحية<select name="role"><option value="collector">محصل</option><option value="invoice_issuer">مُصدر فواتير</option><option value="planner">Planner</option><option value="admin">admin</option><option value="viewer">viewer</option></select></label>
             <div class="form-actions"><button type="submit">إضافة مستخدم</button></div>
           </form>
-          <div class="panel">
+          <div class="panel" data-page-pane="display">
             <div class="panel-head"><h2>المستخدمون</h2></div>
             <div class="table-wrap records">
               <table>

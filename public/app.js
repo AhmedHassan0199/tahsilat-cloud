@@ -37,6 +37,28 @@ function qsa(selector, root = document) {
   return Array.from(root.querySelectorAll(selector));
 }
 
+function setPageMode(sectionOrId, mode = "entry") {
+  const section = typeof sectionOrId === "string" ? qs(`#${sectionOrId}`) : sectionOrId;
+  if (!section) return;
+  const entryButton = qs('[data-page-mode="entry"]', section);
+  const selected = mode === "entry" && entryButton && !entryButton.classList.contains("hidden") ? "entry" : "display";
+  section.dataset.pageView = selected;
+  qsa(".page-action-tab", section).forEach((button) => {
+    const active = button.dataset.pageMode === selected;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-selected", active ? "true" : "false");
+  });
+}
+
+function refreshPageModePermissions() {
+  qsa(".tab-panel").filter((section) => qs(".page-action-tabs", section)).forEach((section) => {
+    const entryButton = qs('[data-page-mode="entry"]', section);
+    const hasEntryForm = qsa('form[data-page-pane="entry"]', section).some((form) => !form.classList.contains("hidden"));
+    entryButton?.classList.toggle("hidden", !hasEntryForm);
+    setPageMode(section, hasEntryForm ? (section.dataset.pageView || "entry") : "display");
+  });
+}
+
 const searchableSelects = new WeakMap();
 
 function normalizeFilterText(value) {
@@ -271,6 +293,7 @@ function applyRolePermissions() {
     const allowed = isAdmin() || (collector && ["collectionForm", "directSaleForm", "giftForm", "supplyOrderForm", "deliveryNoteForm"].includes(id)) || (invoiceIssuer && id === "invoiceForm");
     qs(`#${id}`)?.classList.toggle("hidden", !allowed);
   });
+  refreshPageModePermissions();
   if (isAdmin() || collector) setCollectionMode("normal");
   qsa(".entry-layout").forEach((layout) => layout.classList.toggle("read-only-layout", isViewer() || planner));
 
@@ -314,7 +337,7 @@ function fillCustomerSelect(select, current = "") {
   select.innerHTML = "";
   const placeholder = document.createElement("option");
   placeholder.value = "";
-  placeholder.textContent = ["collectionReportCustomer", "collectionCustomerFilter"].includes(select.id) ? "كل العملاء" : "اختر العميل";
+  placeholder.textContent = ["collectionReportCustomer", "collectionCustomerFilter", "supplyOrderCustomerFilter", "deliveryNoteCustomerFilter", "invoiceCustomerFilter"].includes(select.id) ? "كل العملاء" : "اختر العميل";
   select.appendChild(placeholder);
   state.customers.forEach((customer) => {
     const option = document.createElement("option");
@@ -1012,7 +1035,10 @@ function renderTransfers() {
 function renderSupplyOrders() {
   const body = qs("#supplyOrderRows");
   if (!body) return;
-  body.innerHTML = state.supplyOrders.map((item) => `
+  const customerId = qs("#supplyOrderCustomerFilter")?.value;
+  const customerName = state.customers.find((item) => String(item.id) === String(customerId))?.name;
+  const items = state.supplyOrders.filter((item) => !customerId || String(item.customer_id) === String(customerId) || normalizeFilterText(item.customer_name) === normalizeFilterText(customerName));
+  body.innerHTML = items.map((item) => `
     <tr>
       <td data-label="رقم">${item.id}</td>
       <td data-label="التاريخ">${item.order_date || "-"}</td>
@@ -1038,7 +1064,10 @@ function renderSupplyOrders() {
 function renderDeliveryNotes() {
   const body = qs("#deliveryNoteRows");
   if (!body) return;
-  body.innerHTML = state.deliveryNotes.map((item) => `
+  const customerId = qs("#deliveryNoteCustomerFilter")?.value;
+  const customerName = state.customers.find((item) => String(item.id) === String(customerId))?.name;
+  const items = state.deliveryNotes.filter((item) => !customerId || String(item.customer_id) === String(customerId) || normalizeFilterText(item.customer_name) === normalizeFilterText(customerName));
+  body.innerHTML = items.map((item) => `
     <tr>
       <td data-label="رقم">${item.id}</td>
       <td data-label="التاريخ">${item.delivery_date || "-"}</td>
@@ -1059,7 +1088,10 @@ function renderDeliveryNotes() {
 function renderInvoices() {
   const body = qs("#invoiceRows");
   if (!body) return;
-  body.innerHTML = state.invoices.map((item) => `
+  const customerId = qs("#invoiceCustomerFilter")?.value;
+  const customerName = state.customers.find((item) => String(item.id) === String(customerId))?.name;
+  const items = state.invoices.filter((item) => !customerId || String(item.customer_id) === String(customerId) || normalizeFilterText(item.customer_name) === normalizeFilterText(customerName));
+  body.innerHTML = items.map((item) => `
     <tr>
       <td data-label="رقم">${item.id}</td>
       <td data-label="التاريخ">${item.invoice_date || "-"}</td>
@@ -1285,6 +1317,9 @@ async function loadBootstrap() {
   qsa('select[name="customer_id"]').forEach((select) => fillCustomerSelect(select, select.value));
   fillCustomerSelect(qs("#collectionReportCustomer"), qs("#collectionReportCustomer")?.value);
   fillCustomerSelect(qs("#collectionCustomerFilter"), qs("#collectionCustomerFilter")?.value);
+  fillCustomerSelect(qs("#supplyOrderCustomerFilter"), qs("#supplyOrderCustomerFilter")?.value);
+  fillCustomerSelect(qs("#deliveryNoteCustomerFilter"), qs("#deliveryNoteCustomerFilter")?.value);
+  fillCustomerSelect(qs("#invoiceCustomerFilter"), qs("#invoiceCustomerFilter")?.value);
   fillCustomerSelect(qs("#statementCustomer"), qs("#statementCustomer")?.value);
   qsa('select[name="collection_type"]').forEach((select) => fillSelect(select, state.collectionTypes, select.value));
   fillSelect(qs("#collectionReportType"), ["", ...state.collectionTypes], qs("#collectionReportType")?.value);
@@ -1327,6 +1362,9 @@ async function loadCustomers() {
   qsa('select[name="customer_id"]').forEach((select) => fillCustomerSelect(select, select.value));
   fillCustomerSelect(qs("#statementCustomer"), qs("#statementCustomer")?.value);
   fillCustomerSelect(qs("#collectionCustomerFilter"), qs("#collectionCustomerFilter")?.value);
+  fillCustomerSelect(qs("#supplyOrderCustomerFilter"), qs("#supplyOrderCustomerFilter")?.value);
+  fillCustomerSelect(qs("#deliveryNoteCustomerFilter"), qs("#deliveryNoteCustomerFilter")?.value);
+  fillCustomerSelect(qs("#invoiceCustomerFilter"), qs("#invoiceCustomerFilter")?.value);
   fillSupplyOrderFormLookups();
   fillDeliveryNoteFormLookups();
 }
@@ -1811,6 +1849,7 @@ async function downloadBackup() {
 function editCollection(id) {
   const item = state.collections.find((row) => String(row.id) === String(id));
   if (!item) return;
+  setPageMode("collections", "entry");
   setCollectionMode("normal");
   const form = qs("#collectionForm");
   form.elements.id.value = item.id;
@@ -1839,6 +1878,7 @@ function editCollection(id) {
 function editExpense(id) {
   const item = state.expenses.find((row) => String(row.id) === String(id));
   if (!item) return;
+  setPageMode("expenses", "entry");
   const form = qs("#expenseForm");
   form.elements.id.value = item.id;
   form.entry_date.value = item.entry_date || "";
@@ -1866,6 +1906,7 @@ function resetTransferForm() {
 function editTransfer(id) {
   const item = state.transfers.find((row) => String(row.id) === String(id));
   if (!item) return;
+  setPageMode("transfers", "entry");
   const form = qs("#transferForm");
   form.elements.id.value = item.id;
   form.entry_date.value = item.entry_date || "";
@@ -1885,6 +1926,7 @@ function editTransfer(id) {
 function editSupplyOrder(id) {
   const item = state.supplyOrders.find((row) => String(row.id) === String(id));
   if (!item) return;
+  setPageMode("supplyOrders", "entry");
   const form = qs("#supplyOrderForm");
   form.elements.id.value = item.id;
   form.order_date.value = item.order_date || "";
@@ -1913,6 +1955,7 @@ function editSupplyOrder(id) {
 function editDeliveryNote(id) {
   const item = state.deliveryNotes.find((row) => String(row.id) === String(id));
   if (!item) return;
+  setPageMode("deliveryNotes", "entry");
   const form = qs("#deliveryNoteForm");
   form.elements.id.value = item.id;
   form.delivery_date.value = item.delivery_date || "";
@@ -1938,6 +1981,7 @@ function editDeliveryNote(id) {
 function editInvoice(id) {
   const item = state.invoices.find((row) => String(row.id) === String(id));
   if (!item) return;
+  setPageMode("invoices", "entry");
   const form = qs("#invoiceForm");
   form.elements.id.value = item.id;
   form.invoice_date.value = item.invoice_date || "";
@@ -2005,6 +2049,10 @@ function bindFormAction(selector, handler) {
 function bindEvents() {
   qsa(".tab").forEach((tab) => {
     tab.addEventListener("click", () => setActiveTab(tab.dataset.tab));
+  });
+
+  qsa(".page-action-tab").forEach((button) => {
+    button.addEventListener("click", () => setPageMode(button.closest(".tab-panel"), button.dataset.pageMode));
   });
 
   qsa(".report-tab").forEach((tab) => {
@@ -2159,6 +2207,9 @@ function bindEvents() {
   });
 
   qs("#collectionCustomerFilter").addEventListener("change", loadCollections);
+  qs("#supplyOrderCustomerFilter").addEventListener("change", renderSupplyOrders);
+  qs("#deliveryNoteCustomerFilter").addEventListener("change", renderDeliveryNotes);
+  qs("#invoiceCustomerFilter").addEventListener("change", renderInvoices);
   qs("#customerSearch").addEventListener("input", renderCustomers);
   qs("#collectionMonth").addEventListener("change", loadCollections);
   qs('#collectionForm select[name="collection_type"]').addEventListener("change", toggleCollectionOtherType);
