@@ -1288,20 +1288,20 @@ async function createDirectSale(request, env, user) {
 
   const rawItems = Array.isArray(payload.items) ? payload.items : [];
   if (!rawItems.length) throw new HttpError("يجب إضافة صنف واحد على الأقل", 400);
+  if (rawItems.length > 50) throw new HttpError("الحد الأقصى هو 50 صنفًا في الفاتورة الواحدة", 400);
   const items = [];
   for (let index = 0; index < rawItems.length; index += 1) {
     const raw = rawItems[index];
     const productType = ["كوبايات - علب", "غطيان"].includes(raw.product_type) ? raw.product_type : "";
-    const designId = Number(raw.design_id || 0) || null;
+    const designName = String(raw.design_name || "").trim().slice(0, 200);
     const sizeId = Number(raw.size_id || 0) || null;
     const quantityUnit = ["كيلو", "كرتونه"].includes(raw.quantity_unit) ? raw.quantity_unit : "كرتونه";
     const quantity = Number(raw.quantity_amount || 0);
     const unitPrice = Number(raw.unit_price || 0);
-    if (!productType || !sizeId || quantity <= 0 || unitPrice < 0 || !Number.isFinite(quantity) || !Number.isFinite(unitPrice)) throw new HttpError(`بيانات الصنف ${index + 1} غير صحيحة`, 400);
-    const design = productType === "غطيان" ? { id: null, name: "" } : await env.DB.prepare("SELECT id,name FROM designs WHERE id=? AND active=1").bind(designId).first();
+    if (!productType || !designName || !sizeId || quantity <= 0 || unitPrice < 0 || !Number.isFinite(quantity) || !Number.isFinite(unitPrice)) throw new HttpError(`بيانات الصنف ${index + 1} غير صحيحة`, 400);
     const size = await env.DB.prepare("SELECT id,name FROM product_sizes WHERE id=? AND active=1").bind(sizeId).first();
-    if (!design || !size) throw new HttpError(`التصميم أو المقاس غير صحيح في الصنف ${index + 1}`, 400);
-    items.push({ line_no: index + 1, product_type: productType, design_id: design.id, design_name: design.name, size_id: size.id, size_name: size.name, quantity_unit: quantityUnit, quantity_amount: quantity, unit_price: unitPrice, line_total: quantity * unitPrice, note: String(raw.note || "").trim() || null });
+    if (!size) throw new HttpError(`المقاس غير صحيح في الصنف ${index + 1}`, 400);
+    items.push({ line_no: index + 1, product_type: productType, design_id: null, design_name: designName, size_id: size.id, size_name: size.name, quantity_unit: quantityUnit, quantity_amount: quantity, unit_price: unitPrice, line_total: quantity * unitPrice, note: String(raw.note || "").trim() || null });
   }
   const subtotal = items.reduce((sum, item) => sum + item.line_total, 0);
   const total = subtotal + deliveryCharge;

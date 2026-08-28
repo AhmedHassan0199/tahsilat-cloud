@@ -761,6 +761,47 @@ label.check input {
   margin-bottom: 8px;
 }
 
+.direct-sale-items-section {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #f8fbf7;
+}
+
+.direct-sale-items {
+  display: grid;
+  gap: 12px;
+}
+
+.direct-sale-item {
+  margin: 0;
+  background: #fff;
+}
+
+.direct-sale-item-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.direct-sale-line-total,
+.direct-sale-total {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: #eaf3e8;
+}
+
+.direct-sale-total {
+  color: var(--primary-dark);
+  font-size: 1.05rem;
+}
+
 .selected-row {
   background: #f0f7ff;
 }
@@ -1072,6 +1113,10 @@ label.check input {
 }
 
 @media (max-width: 640px) {
+  .direct-sale-item-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
   .login-screen {
     align-items: stretch;
     padding: 12px;

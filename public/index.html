@@ -161,12 +161,11 @@
             <label>عميل مسجل (اختياري)<select name="customer_id"></select></label>
             <label id="directManualCustomerWrap">اسم العميل يدويًا<input name="manual_customer_name" autocomplete="off"></label>
             <label class="check" id="directSaveCustomerWrap"><input name="save_customer" type="checkbox"> حفظ العميل في قائمة العملاء</label>
-            <label>نوع الصنف<select name="product_type"><option value="كوبايات - علب">كوبايات - علب</option><option value="غطيان">غطيان</option></select></label>
-            <label id="directDesignWrap">التصميم<select name="design_id"></select></label>
-            <label>المقاس<select name="size_id" required></select></label>
-            <label>وحدة العدد<select name="quantity_unit"><option>كرتونه</option><option>كيلو</option></select></label>
-            <label>العدد<input name="quantity_amount" type="number" min="0.01" step="0.01" required></label>
-            <label>سعر الوحدة<input name="unit_price" type="number" min="0" step="0.01" required></label>
+            <div class="wide direct-sale-items-section">
+              <div class="line-card-head"><strong>أصناف الفاتورة</strong><button id="addDirectSaleItemBtn" class="secondary" type="button">+ إضافة صنف</button></div>
+              <div id="directSaleItems" class="direct-sale-items"></div>
+              <div class="direct-sale-total"><span>إجمالي الأصناف</span><strong id="directSaleSubtotal">0</strong></div>
+            </div>
             <label>مصاريف النقل<input name="delivery_charge" type="number" min="0" step="0.01" value="0"></label>
             <label>طريقة التحصيل<select name="payment_method" required></select></label>
             <label class="wide">ملاحظة<textarea name="note" rows="2"></textarea></label>

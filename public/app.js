@@ -1516,14 +1516,75 @@ function resetCollectionForm() {
   toggleCollectionCustody();
 }
 
+function directSaleItemMarkup(index) {
+  const sizeOptions = state.productSizes.map((size) => `<option value="${escapeHtml(size.id)}">${escapeHtml(size.name)}</option>`).join("");
+  return `
+    <div class="line-card direct-sale-item" data-direct-sale-item>
+      <div class="line-card-head"><strong>الصنف ${index + 1}</strong><button class="danger direct-sale-remove" type="button" data-remove-direct-sale-item title="حذف الصنف">×</button></div>
+      <div class="direct-sale-item-grid">
+        <label>نوع الصنف<select data-field="product_type"><option value="كوبايات - علب">كوبايات - علب</option><option value="غطيان">غطيان</option></select></label>
+        <label>التصميم يدويًا<input data-field="design_name" required autocomplete="off" placeholder="اكتب اسم التصميم كما سيظهر في الإذن والفاتورة"></label>
+        <label>المقاس<select data-field="size_id" required><option value="">اختر المقاس</option>${sizeOptions}</select></label>
+        <label>وحدة العدد<select data-field="quantity_unit"><option>كرتونه</option><option>كيلو</option></select></label>
+        <label>العدد<input data-field="quantity_amount" type="number" min="0.01" step="0.01" required></label>
+        <label>سعر الوحدة<input data-field="unit_price" type="number" min="0" step="0.01" required></label>
+        <label class="wide">ملاحظة الصنف<input data-field="note" autocomplete="off"></label>
+        <div class="direct-sale-line-total wide"><span>إجمالي الصنف</span><strong data-line-total>0</strong></div>
+      </div>
+    </div>`;
+}
+
+function renumberDirectSaleItems() {
+  const cards = qsa("[data-direct-sale-item]", qs("#directSaleItems"));
+  cards.forEach((card, index) => {
+    qs(".line-card-head strong", card).textContent = `الصنف ${index + 1}`;
+    qs("[data-remove-direct-sale-item]", card).classList.toggle("hidden", cards.length === 1);
+  });
+}
+
+function recalculateDirectSaleTotals() {
+  let subtotal = 0;
+  qsa("[data-direct-sale-item]", qs("#directSaleItems")).forEach((card) => {
+    const quantity = Number(qs('[data-field="quantity_amount"]', card).value || 0);
+    const price = Number(qs('[data-field="unit_price"]', card).value || 0);
+    const lineTotal = Number.isFinite(quantity * price) ? quantity * price : 0;
+    qs("[data-line-total]", card).textContent = money(lineTotal);
+    subtotal += lineTotal;
+  });
+  qs("#directSaleSubtotal").textContent = money(subtotal);
+}
+
+function addDirectSaleItem() {
+  const container = qs("#directSaleItems");
+  const wrapper = document.createElement("div");
+  wrapper.innerHTML = directSaleItemMarkup(qsa("[data-direct-sale-item]", container).length).trim();
+  const card = wrapper.firstElementChild;
+  container.appendChild(card);
+  enhanceSearchableSelects(card);
+  renumberDirectSaleItems();
+  recalculateDirectSaleTotals();
+  return card;
+}
+
+function directSalePayloadItems() {
+  return qsa("[data-direct-sale-item]", qs("#directSaleItems")).map((card) => ({
+    product_type: qs('[data-field="product_type"]', card).value,
+    design_name: qs('[data-field="design_name"]', card).value.trim(),
+    size_id: qs('[data-field="size_id"]', card).value,
+    quantity_unit: qs('[data-field="quantity_unit"]', card).value,
+    quantity_amount: qs('[data-field="quantity_amount"]', card).value,
+    unit_price: qs('[data-field="unit_price"]', card).value,
+    note: qs('[data-field="note"]', card).value.trim(),
+  }));
+}
+
 function fillDirectSaleForm() {
   const form = qs("#directSaleForm");
   if (!form) return;
   fillSelect(form.responsible, state.responsibles, form.responsible.value);
   fillCustomerSelect(form.customer_id, form.customer_id.value);
   fillSelect(form.payment_method, state.paymentMethods, form.payment_method.value);
-  fillExistingLookupSelect(form.design_id, state.designs, "اختر التصميم", form.design_id.value);
-  fillExistingLookupSelect(form.size_id, state.productSizes, "اختر المقاس", form.size_id.value);
+  if (!qs("[data-direct-sale-item]", qs("#directSaleItems"))) addDirectSaleItem();
   toggleDirectSaleCustomer();
 }
 
@@ -1567,10 +1628,11 @@ async function saveDirectSale(event) {
     payment_method: raw.payment_method,
     delivery_charge: raw.delivery_charge,
     note: raw.note,
-    items: [{ product_type: raw.product_type, design_id: raw.design_id, size_id: raw.size_id, quantity_unit: raw.quantity_unit, quantity_amount: raw.quantity_amount, unit_price: raw.unit_price }],
+    items: directSalePayloadItems(),
   };
   const result = await api("/api/direct-sales", { method: "POST", body: JSON.stringify(payload) });
   form.reset();
+  qs("#directSaleItems").replaceChildren();
   fillDirectSaleForm();
   showToast(`تم إصدار الفاتورة #${result.invoice_id} وتسجيل التحصيل`);
   await Promise.all([loadBootstrap(), loadCollections(), loadDeliveryNotes(), loadInvoices()]);
@@ -2215,10 +2277,16 @@ function bindEvents() {
   qs('#collectionForm select[name="collection_type"]').addEventListener("change", toggleCollectionOtherType);
   qs('#collectionForm select[name="payment_method"]').addEventListener("change", toggleCollectionCustody);
   qs('#directSaleForm select[name="customer_id"]').addEventListener("change", toggleDirectSaleCustomer);
-  qs('#directSaleForm select[name="product_type"]').addEventListener("change", (event) => {
-    const covers = event.target.value === "غطيان";
-    qs("#directDesignWrap").classList.toggle("hidden", covers);
-    qs('#directSaleForm select[name="design_id"]').required = !covers;
+  qs("#addDirectSaleItemBtn").addEventListener("click", addDirectSaleItem);
+  qs("#directSaleItems").addEventListener("input", recalculateDirectSaleTotals);
+  qs("#directSaleItems").addEventListener("click", (event) => {
+    const removeButton = event.target.closest("[data-remove-direct-sale-item]");
+    if (!removeButton) return;
+    const cards = qsa("[data-direct-sale-item]", qs("#directSaleItems"));
+    if (cards.length <= 1) return;
+    removeButton.closest("[data-direct-sale-item]").remove();
+    renumberDirectSaleItems();
+    recalculateDirectSaleTotals();
   });
   qs('#giftForm select[name="customer_id"]').addEventListener("change", toggleGiftCustomer);
   qs('#giftForm select[name="product_type"]').addEventListener("change", (event) => {
