@@ -1074,6 +1074,7 @@ function renderDeliveryNotes() {
       <td data-label="العميل">${item.customer_name || "-"} ${item.transaction_type === "gift" ? `<span class="gift-badge">هدية</span>` : ""}</td>
       <td data-label="عدد الأصناف">${money(item.item_count)}</td>
       <td data-label="إجمالي العدد">${money(item.total_quantity)}</td>
+      <td data-label="ملاحظة عامة">${escapeHtml(item.note || "-")}</td>
       <td data-label="المستخدم">${item.created_by_name || "-"}</td>
       <td class="actions">
         ${isAdmin() ? `<button type="button" data-edit-delivery-note="${item.id}" title="تعديل">✎</button>` : ""}
@@ -1082,7 +1083,7 @@ function renderDeliveryNotes() {
         ${isAdmin() ? `<button class="danger" type="button" data-delete-delivery-note="${item.id}" title="حذف">×</button>` : ""}
       </td>
     </tr>
-  `).join("") || `<tr><td colspan="7" class="muted">لا توجد أذونات تسليم مسجلة</td></tr>`;
+  `).join("") || `<tr><td colspan="8" class="muted">لا توجد أذونات تسليم مسجلة</td></tr>`;
 }
 
 function renderInvoices() {
@@ -1275,7 +1276,7 @@ function printDeliveryNote(id) {
   const note = state.deliveryNotes.find((row) => String(row.id) === String(id));
   if (!note) return;
   printDocument(`إذن تسليم #${note.id}`, [
-    { type: "meta", rows: [["التاريخ", note.delivery_date || "-"], ["العميل", note.customer_name || "-"]] },
+    { type: "meta", rows: [["التاريخ", note.delivery_date || "-"], ["العميل", note.customer_name || "-"], ["ملاحظة عامة", note.note || "-"]] },
     { type: "table", title: "الأصناف", headers: ["#", "الصنف", "التصميم", "المقاس", "العدد", "ملاحظة"], rows: (note.items || []).map((item) => [item.line_no, item.product_type, item.design_name || "-", item.size_name || "-", `${money(item.quantity_amount)} ${item.quantity_unit || ""}`, item.note || "-"]) },
   ]);
 }

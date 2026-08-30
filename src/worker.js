@@ -939,6 +939,7 @@ async function deliveryNoteXlsxResponse(env, id) {
   const addRow = (values, style = "normal", mergeAcross = 0) => rows.push({ values, style, mergeAcross });
   addRow([note.transaction_type === "gift" ? "إذن تسليم - هدية / بضاعة مجانية" : "إذن تسليم"], "title", 6);
   addRow(["رقم الإذن", note.id, "التاريخ", note.delivery_date || "", "العميل", note.customer_name || ""], "meta");
+  addRow(["ملاحظة عامة", note.note || "", "", "", "", ""], "meta");
   addRow(["", "", "", "", "", ""], "normal");
   addRow(["#", "الصنف", "التصميم", "المقاس", "العدد", "ملاحظة"], "header");
   note.items.forEach((item) => addRow([item.line_no, item.product_type, item.design_name || "", item.size_name || "", `${item.quantity_amount || 0} ${item.quantity_unit || ""}`, item.note || ""]));
