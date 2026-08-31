@@ -175,7 +175,7 @@
             <h2>هدية / بضاعة مجانية</h2>
             <p class="muted section-note">ينشئ إذن تسليم وفاتورة صفرية دون تحصيل أو تأثير على الخزينة.</p>
             <label>التاريخ<input name="entry_date" type="date"></label>
-            <label id="giftResponsibleWrap" class="admin-only">المسؤول في إذن التسليم (اختياري)<select name="responsible"></select></label>
+            <label>المسؤول<select name="responsible" required></select></label>
             <label>عميل مسجل (اختياري)<select name="customer_id"></select></label>
             <label id="giftManualCustomerWrap">اسم العميل يدويًا<input name="manual_customer_name" autocomplete="off"></label>
             <label class="check" id="giftSaveCustomerWrap"><input name="save_customer" type="checkbox"> حفظ العميل في قائمة العملاء</label>
@@ -241,6 +241,7 @@
             <h2 id="supplyOrderFormTitle">أمر التوريد</h2>
             <input type="hidden" name="id">
             <label>التاريخ<input name="order_date" type="date"></label>
+            <label>المسؤول<select name="responsible" required></select></label>
             <label>اسم العميل<select name="customer_id" required></select></label>
             <label id="newSupplyCustomerWrap" class="hidden">اسم عميل جديد<input name="new_customer_name" autocomplete="off"></label>
             <label>اسم التصميم<select name="design_id" required></select></label>
@@ -279,7 +280,7 @@
             <div class="panel-head"><h2>أوامر التوريد المسجلة</h2><div class="filters"><select id="supplyOrderCustomerFilter"><option value="">كل العملاء</option></select></div></div>
             <div class="table-wrap records">
               <table>
-                <thead><tr><th>رقم</th><th>التاريخ</th><th>العميل</th><th>التصميم</th><th>المقاس</th><th>الخامة</th><th>الكمية</th><th>السعر</th><th>سعر السريل</th><th>تاريخ التوريد</th><th>المستخدم</th><th></th></tr></thead>
+                <thead><tr><th>رقم</th><th>التاريخ</th><th>المسؤول</th><th>العميل</th><th>التصميم</th><th>المقاس</th><th>الخامة</th><th>الكمية</th><th>السعر</th><th>سعر السريل</th><th>تاريخ التوريد</th><th>المستخدم</th><th></th></tr></thead>
                 <tbody id="supplyOrderRows"></tbody>
               </table>
             </div>
@@ -295,12 +296,13 @@
             <input type="hidden" name="id">
             <label>التاريخ<input name="delivery_date" type="date"></label>
             <label>العميل<select name="customer_id" required></select></label>
-            <label id="deliveryResponsibleWrap" class="admin-only">المسؤول (اختياري)<select name="responsible"></select></label>
+            <label>المسؤول الموروث<input name="responsible_display" readonly placeholder="يُحدد من أمر التوريد"></label>
             <div class="line-card">
               <div class="line-card-head">
                 <strong id="deliveryItemCounter">الصنف 1 من 1</strong>
               </div>
               <label>الصنف<select name="product_type" required><option value="كوبايات - علب">كوبايات - علب</option><option value="غطيان">غطيان</option></select></label>
+              <label>أمر التوريد<select name="supply_order_id" required></select></label>
               <label id="deliveryDesignWrap">التصميم<select name="design_id"></select></label>
               <label>المقاس<select name="size_id" required></select></label>
               <fieldset class="radio-set">
@@ -325,7 +327,7 @@
             <div class="panel-head" data-page-pane="entry"><h2>الأصناف داخل الإذن</h2></div>
             <div class="table-wrap records" data-page-pane="entry">
               <table>
-                <thead><tr><th>#</th><th>الصنف</th><th>التصميم</th><th>المقاس</th><th>العدد</th><th>ملاحظة</th></tr></thead>
+                <thead><tr><th>#</th><th>أمر التوريد</th><th>المسؤول</th><th>الصنف</th><th>التصميم</th><th>المقاس</th><th>العدد</th><th>ملاحظة</th></tr></thead>
                 <tbody id="deliveryDraftRows"></tbody>
               </table>
             </div>
@@ -357,7 +359,7 @@
             <div class="panel-head"><h2>الفواتير المسجلة</h2><div class="filters"><select id="invoiceCustomerFilter"><option value="">كل العملاء</option></select></div></div>
             <div class="table-wrap records">
               <table>
-                <thead><tr><th>رقم</th><th>التاريخ</th><th>إذن التسليم</th><th>العميل</th><th>الأصناف</th><th>الإجمالي</th><th>المستخدم</th><th></th></tr></thead>
+                <thead><tr><th>رقم</th><th>التاريخ</th><th>إذن التسليم</th><th>العميل</th><th>المسؤول</th><th>الأصناف</th><th>الإجمالي</th><th>المستخدم</th><th></th></tr></thead>
                 <tbody id="invoiceRows"></tbody>
               </table>
             </div>

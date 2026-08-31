@@ -491,7 +491,7 @@ function expenseData(payload) {
 }
 
 function validateCollection(data) {
-  if (!data.responsible) throw new HttpError("المسؤول مطلوب", 400);
+  if (!RESPONSIBLES.includes(data.responsible)) throw new HttpError("المسؤول مطلوب ويجب اختياره من القائمة", 400);
   if (!data.customer_id) throw new HttpError("العميل مطلوب", 400);
   if (!data.client_name) throw new HttpError("اسم العميل مطلوب", 400);
   if (!data.collection_type) throw new HttpError("نوع التحصيل مطلوب", 400);
@@ -753,6 +753,7 @@ async function supplyOrderXlsxResponse(env, id) {
   const sheet = documentSheetRows("أمر توريد", [
     ["رقم الأمر", item.id],
     ["التاريخ", item.order_date || ""],
+    ["المسؤول", item.responsible || "غير محدد"],
     ["العميل", item.customer_name || ""],
     ["التصميم", item.design_name || ""],
     ["المقاس", item.size_name || ""],
@@ -760,7 +761,7 @@ async function supplyOrderXlsxResponse(env, id) {
     ["الكمية", `${item.quantity_amount || 0} ${item.quantity_unit || ""}`],
     ["السعر بدون غطاء", item.price_without_cover || 0],
     ["السعر بالغطاء", item.price_with_cover || 0],
-    ["سعر السريل للون واحد", item.serial_color_price || 0],
+    ["سعر السريل للون واحد", Number(item.serial_color_price || 0) > 0 ? item.serial_color_price : "لا يوجد سريل"],
     ["تكلفة النقل", item.delivery_cost_party || ""],
     ["تاريخ التوريد", item.supply_date || ""],
     ["ملاحظة", item.note || ""],
@@ -772,6 +773,7 @@ async function supplyOrderXlsxResponse(env, id) {
 function supplyOrderData(payload) {
   return {
     order_date: parseDateValue(payload.order_date) || new Date().toISOString().slice(0, 10),
+    responsible: String(payload.responsible || "").trim(),
     customer_id: Number(payload.customer_id || 0) || null,
     new_customer_name: normalizeCustomerName(payload.new_customer_name || ""),
     design_id: Number(payload.design_id || 0) || null,
@@ -801,10 +803,11 @@ async function createSupplyOrder(request, env, user) {
   const data = await prepareSupplyOrder(env, request, user, await readJson(request));
   const now = nowIso();
   const result = await env.DB.prepare(
-    `INSERT INTO supply_orders(order_date, customer_id, customer_name, design_id, design_name, size_id, size_name, material_id, material_name, quantity_unit, quantity_amount, price_without_cover, price_with_cover, serial_color_price, delivery_cost_party, supply_date, print_approval_status, cylinder_colors_count, delivery_duration, payment_method, delivery_place, note, created_by, created_at, updated_at)
-     VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    `INSERT INTO supply_orders(order_date, responsible, customer_id, customer_name, design_id, design_name, size_id, size_name, material_id, material_name, quantity_unit, quantity_amount, price_without_cover, price_with_cover, serial_color_price, delivery_cost_party, supply_date, print_approval_status, cylinder_colors_count, delivery_duration, payment_method, delivery_place, note, created_by, created_at, updated_at)
+     VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).bind(
     data.order_date,
+    data.responsible,
     data.customer_id,
     data.customer_name,
     data.design_id,
@@ -840,6 +843,7 @@ async function prepareSupplyOrder(env, request, user, payload) {
   const design = await resolveLookup(env, request, user, "designs", data.design_id, data.new_design_name, "اسم التصميم مطلوب");
   const size = await resolveLookup(env, request, user, "product_sizes", data.size_id, data.new_size_name, "المقاس المطلوب مطلوب");
   const material = await resolveLookup(env, request, user, "materials", data.material_id, data.new_material_name, "الخامة مطلوبة");
+  if (!RESPONSIBLES.includes(data.responsible)) throw new HttpError("المسؤول مطلوب ويجب اختياره من القائمة", 400);
   if (!Number.isFinite(data.quantity_amount) || data.quantity_amount <= 0) throw new HttpError("الكمية المطلوبة يجب أن تكون أكبر من صفر", 400);
   if (!Number.isFinite(data.price_without_cover) || data.price_without_cover < 0) throw new HttpError("السعر بدون غطاء غير صحيح", 400);
   if (!Number.isFinite(data.price_with_cover) || data.price_with_cover < 0) throw new HttpError("السعر بالغطاء غير صحيح", 400);
@@ -864,10 +868,11 @@ async function updateSupplyOrder(request, env, user, id) {
   const data = await prepareSupplyOrder(env, request, user, await readJson(request));
   await env.DB.prepare(
     `UPDATE supply_orders
-     SET order_date=?, customer_id=?, customer_name=?, design_id=?, design_name=?, size_id=?, size_name=?, material_id=?, material_name=?, quantity_unit=?, quantity_amount=?, price_without_cover=?, price_with_cover=?, serial_color_price=?, delivery_cost_party=?, supply_date=?, print_approval_status=?, cylinder_colors_count=?, delivery_duration=?, payment_method=?, delivery_place=?, note=?, updated_at=?
+     SET order_date=?, responsible=?, customer_id=?, customer_name=?, design_id=?, design_name=?, size_id=?, size_name=?, material_id=?, material_name=?, quantity_unit=?, quantity_amount=?, price_without_cover=?, price_with_cover=?, serial_color_price=?, delivery_cost_party=?, supply_date=?, print_approval_status=?, cylinder_colors_count=?, delivery_duration=?, payment_method=?, delivery_place=?, note=?, updated_at=?
      WHERE id=?`
   ).bind(
     data.order_date,
+    data.responsible,
     data.customer_id,
     data.customer_name,
     data.design_id,
@@ -972,8 +977,8 @@ async function deliveryNoteXlsxResponse(env, id) {
   addRow(["رقم الإذن", note.id, "التاريخ", note.delivery_date || "", "العميل", note.customer_name || ""], "meta");
   addRow(["المسؤول", note.responsible || "", "ملاحظة عامة", note.note || "", "", ""], "meta");
   addRow(["", "", "", "", "", ""], "normal");
-  addRow(["#", "الصنف", "التصميم", "المقاس", "العدد", "ملاحظة"], "header");
-  note.items.forEach((item) => addRow([item.line_no, item.product_type, item.design_name || "", item.size_name || "", `${item.quantity_amount || 0} ${item.quantity_unit || ""}`, item.note || ""]));
+  addRow(["#", "أمر التوريد", "الصنف", "التصميم", "المقاس", "العدد", "ملاحظة"], "header");
+  note.items.forEach((item) => addRow([item.line_no, item.supply_order_id ? `#${item.supply_order_id}` : "-", item.product_type, item.design_name || "", item.size_name || "", `${item.quantity_amount || 0} ${item.quantity_unit || ""}`, item.note || ""]));
   const prepared = normalizeSheetRows(rows);
   const file = reportXlsx(`إذن تسليم ${id}`, prepared.rows, prepared.merges, {
     brandLogo: await xlsxBrandLogo(env),
@@ -982,17 +987,16 @@ async function deliveryNoteXlsxResponse(env, id) {
   return xlsxDownload(file, `delivery-note-${id}.xlsx`);
 }
 
-function deliveryResponsible(user, requestedValue) {
+function selectedResponsible(requestedValue) {
   const requested = String(requestedValue || "").trim();
-  if (effectiveRole(user) === "admin" && RESPONSIBLES.includes(requested)) return requested;
-  return String(user?.display_name || "").trim();
+  if (!RESPONSIBLES.includes(requested)) throw new HttpError("المسؤول مطلوب ويجب اختياره من القائمة", 400);
+  return requested;
 }
 
-function deliveryNoteData(payload, user) {
+function deliveryNoteData(payload) {
   return {
     delivery_date: parseDateValue(payload.delivery_date) || new Date().toISOString().slice(0, 10),
     customer_id: Number(payload.customer_id || 0) || null,
-    responsible: deliveryResponsible(user, payload.responsible),
     note: String(payload.note || "").trim() || null,
     items: Array.isArray(payload.items) ? payload.items : [],
   };
@@ -1001,6 +1005,7 @@ function deliveryNoteData(payload, user) {
 function deliveryItemData(payload, index) {
   return {
     source_item_id: Number(payload.source_item_id || 0) || null,
+    supply_order_id: Number(payload.supply_order_id || 0) || null,
     line_no: index + 1,
     product_type: ["كوبايات - علب", "غطيان"].includes(payload.product_type) ? payload.product_type : "",
     design_id: Number(payload.design_id || 0) || null,
@@ -1013,7 +1018,7 @@ function deliveryItemData(payload, index) {
 
 async function createDeliveryNote(request, env, user) {
   assertCanWrite(user, { allowCollector: true });
-  const data = await prepareDeliveryNote(env, await readJson(request), user);
+  const data = await prepareDeliveryNote(env, await readJson(request));
   assertAccountingDate(data.delivery_date, "تاريخ إذن التسليم");
   const now = nowIso();
   const result = await env.DB.prepare(
@@ -1027,17 +1032,18 @@ async function createDeliveryNote(request, env, user) {
   return json({ id: deliveryNoteId, item_count: data.items.length });
 }
 
-async function prepareDeliveryNote(env, payload, user) {
-  const data = deliveryNoteData(payload, user);
+async function prepareDeliveryNote(env, payload, options = {}) {
+  const data = deliveryNoteData(payload);
   if (!data.customer_id) throw new HttpError("العميل مطلوب", 400);
-  if (!data.responsible) throw new HttpError("المسؤول غير متاح", 400);
   if (!data.items.length) throw new HttpError("يجب إضافة صنف واحد على الأقل في إذن التسليم", 400);
   const customer = await env.DB.prepare("SELECT id, name FROM customers WHERE id = ? AND active = 1").bind(data.customer_id).first();
   if (!customer) throw new HttpError("العميل غير صحيح", 400);
 
   const items = [];
+  const responsibles = new Set();
   for (let index = 0; index < data.items.length; index += 1) {
     const item = deliveryItemData(data.items[index], index);
+    if (!item.supply_order_id && !options.allowUnlinked) throw new HttpError(`أمر التوريد مطلوب في السطر ${item.line_no}`, 400);
     if (!item.product_type) throw new HttpError(`نوع الصنف مطلوب في السطر ${item.line_no}`, 400);
     if (item.product_type !== "غطيان" && !item.design_id) throw new HttpError(`التصميم مطلوب في السطر ${item.line_no}`, 400);
     if (!item.size_id) throw new HttpError(`المقاس مطلوب في السطر ${item.line_no}`, 400);
@@ -1048,10 +1054,22 @@ async function prepareDeliveryNote(env, payload, user) {
     if (item.product_type !== "غطيان" && !design) throw new HttpError(`التصميم غير صحيح في السطر ${item.line_no}`, 400);
     const size = await env.DB.prepare("SELECT id, name FROM product_sizes WHERE id = ? AND active = 1").bind(item.size_id).first();
     if (!size) throw new HttpError(`المقاس غير صحيح في السطر ${item.line_no}`, 400);
+    if (!item.supply_order_id && options.allowUnlinked) {
+      items.push({ ...item, design_id: design.id, design_name: design.name, size_name: size.name });
+      continue;
+    }
+    const order = await env.DB.prepare("SELECT * FROM supply_orders WHERE id = ?").bind(item.supply_order_id).first();
+    if (!order) throw new HttpError(`أمر التوريد غير صحيح في السطر ${item.line_no}`, 400);
+    if (!RESPONSIBLES.includes(String(order.responsible || "").trim())) throw new HttpError(`حدد المسؤول في أمر التوريد #${order.id} أولا`, 400);
+    if (Number(order.customer_id) !== Number(customer.id) || (item.product_type !== "غطيان" && Number(order.design_id) !== Number(design.id)) || Number(order.size_id) !== Number(size.id)) throw new HttpError(`أمر التوريد لا يطابق العميل والتصميم والمقاس في السطر ${item.line_no}`, 400);
+    responsibles.add(order.responsible);
     items.push({ ...item, design_id: design.id, design_name: design.name, size_name: size.name });
   }
+  if (!options.allowUnlinked && responsibles.size !== 1) throw new HttpError("يجب أن تكون جميع أوامر التوريد في الإذن لنفس المسؤول", 400);
+  const responsible = options.allowUnlinked ? selectedResponsible(options.responsible) : [...responsibles][0];
   return {
     ...data,
+    responsible,
     customer_id: customer.id,
     customer_name: customer.name,
     items,
@@ -1061,8 +1079,8 @@ async function prepareDeliveryNote(env, payload, user) {
 async function insertDeliveryNoteItems(env, deliveryNoteId, items) {
   for (const item of items) {
     await env.DB.prepare(
-      `INSERT INTO delivery_note_items(delivery_note_id, line_no, product_type, design_id, design_name, size_id, size_name, quantity_unit, quantity_amount, note)
-       VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      `INSERT INTO delivery_note_items(delivery_note_id, line_no, product_type, design_id, design_name, size_id, size_name, quantity_unit, quantity_amount, note, supply_order_id)
+       VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).bind(
       deliveryNoteId,
       item.line_no,
@@ -1073,7 +1091,8 @@ async function insertDeliveryNoteItems(env, deliveryNoteId, items) {
       item.size_name,
       item.quantity_unit,
       item.quantity_amount,
-      item.note
+      item.note,
+      item.supply_order_id
     ).run();
   }
 }
@@ -1090,7 +1109,7 @@ async function updateDeliveryNote(request, env, user, id) {
   const before = await deliveryNoteWithItems(env, id);
   if (!before) throw new HttpError("Record not found", 404);
   assertRecordNotArchived(before, "delivery_date");
-  const data = await prepareDeliveryNote(env, await readJson(request), user);
+  const data = await prepareDeliveryNote(env, await readJson(request), { allowUnlinked: before.transaction_type !== "standard", responsible: before.responsible });
   assertAccountingDate(data.delivery_date, "تاريخ إذن التسليم");
   const linkedInvoiceRow = await env.DB.prepare("SELECT id FROM invoices WHERE delivery_note_id = ?").bind(id).first();
   const linkedInvoice = linkedInvoiceRow ? await invoiceWithItems(env, linkedInvoiceRow.id) : null;
@@ -1106,9 +1125,9 @@ async function updateDeliveryNote(request, env, user, id) {
   statements.push(env.DB.prepare("DELETE FROM delivery_note_items WHERE delivery_note_id = ?").bind(id));
   for (const item of data.items) {
     statements.push(env.DB.prepare(
-      `INSERT INTO delivery_note_items(delivery_note_id,line_no,product_type,design_id,design_name,size_id,size_name,quantity_unit,quantity_amount,note)
-       VALUES(?,?,?,?,?,?,?,?,?,?)`
-    ).bind(id, item.line_no, item.product_type, item.design_id, item.design_name, item.size_id, item.size_name, item.quantity_unit, item.quantity_amount, item.note));
+      `INSERT INTO delivery_note_items(delivery_note_id,line_no,product_type,design_id,design_name,size_id,size_name,quantity_unit,quantity_amount,note,supply_order_id)
+       VALUES(?,?,?,?,?,?,?,?,?,?,?)`
+    ).bind(id, item.line_no, item.product_type, item.design_id, item.design_name, item.size_id, item.size_name, item.quantity_unit, item.quantity_amount, item.note, item.supply_order_id));
   }
 
   let requiresInvoiceReview = false;
@@ -1123,36 +1142,44 @@ async function updateDeliveryNote(request, env, user, id) {
       const identityChanged = customerChanged || !oldNoteItem || !oldInvoiceItem
         || oldNoteItem.product_type !== item.product_type
         || Number(oldNoteItem.design_id || 0) !== Number(item.design_id || 0)
-        || Number(oldNoteItem.size_id || 0) !== Number(item.size_id || 0);
+        || Number(oldNoteItem.size_id || 0) !== Number(item.size_id || 0)
+        || Number(oldNoteItem.supply_order_id || 0) !== Number(item.supply_order_id || 0);
       if (identityChanged) requiresInvoiceReview = linkedInvoice.transaction_type !== "gift";
       const gift = linkedInvoice.transaction_type === "gift";
       const preservePrice = !identityChanged && oldInvoiceItem;
       const unitPrice = gift ? 0 : preservePrice ? Number(oldInvoiceItem.unit_price || 0) : 0;
+      const serialColorPrice = gift ? 0 : preservePrice ? Number(oldInvoiceItem.serial_color_price || 0) : 0;
+      const serialColorsCount = gift ? 0 : preservePrice ? Number(oldInvoiceItem.serial_colors_count || 0) : 0;
+      const serialTotal = gift ? 0 : preservePrice ? Number(oldInvoiceItem.serial_total || 0) : 0;
       return {
         ...item,
-        supply_order_id: gift ? null : preservePrice ? oldInvoiceItem.supply_order_id : null,
+        supply_order_id: gift ? null : item.supply_order_id,
         price_type: gift ? "gift" : preservePrice ? oldInvoiceItem.price_type : "pending",
         unit_price: unitPrice,
         line_total: Number(item.quantity_amount || 0) * unitPrice,
+        serial_color_price: serialColorPrice,
+        serial_colors_count: serialColorsCount,
+        serial_total: serialTotal,
       };
     });
     const subtotal = syncedItems.reduce((sum, item) => sum + item.line_total, 0);
-    const total = subtotal + Number(linkedInvoice.delivery_charge || 0);
+    const serialTotal = syncedItems.reduce((sum, item) => sum + item.serial_total, 0);
+    const total = subtotal + serialTotal + Number(linkedInvoice.delivery_charge || 0);
     for (const item of syncedItems) {
       statements.push(env.DB.prepare(
-        `INSERT INTO invoice_items(invoice_id,delivery_note_item_id,line_no,product_type,design_id,design_name,size_id,size_name,quantity_unit,quantity_amount,supply_order_id,price_type,unit_price,line_total)
-         VALUES(?,(SELECT id FROM delivery_note_items WHERE delivery_note_id=? AND line_no=?),?,?,?,?,?,?,?,?,?,?,?,?)`
-      ).bind(linkedInvoice.id, id, item.line_no, item.line_no, item.product_type, item.design_id, item.design_name, item.size_id, item.size_name, item.quantity_unit, item.quantity_amount, item.supply_order_id, item.price_type, item.unit_price, item.line_total));
+        `INSERT INTO invoice_items(invoice_id,delivery_note_item_id,line_no,product_type,design_id,design_name,size_id,size_name,quantity_unit,quantity_amount,supply_order_id,price_type,unit_price,line_total,serial_color_price,serial_colors_count,serial_total)
+         VALUES(?,(SELECT id FROM delivery_note_items WHERE delivery_note_id=? AND line_no=?),?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+      ).bind(linkedInvoice.id, id, item.line_no, item.line_no, item.product_type, item.design_id, item.design_name, item.size_id, item.size_name, item.quantity_unit, item.quantity_amount, item.supply_order_id, item.price_type, item.unit_price, item.line_total, item.serial_color_price, item.serial_colors_count, item.serial_total));
     }
     statements.push(env.DB.prepare(
-      `UPDATE invoices SET customer_id=?,customer_name=?,subtotal=?,total=?,updated_at=? WHERE id=?`
-    ).bind(data.customer_id, data.customer_name, subtotal, total, nowIso(), linkedInvoice.id));
+      `UPDATE invoices SET customer_id=?,customer_name=?,responsible=?,subtotal=?,serial_total=?,total=?,updated_at=? WHERE id=?`
+    ).bind(data.customer_id, data.customer_name, data.responsible, subtotal, serialTotal, total, nowIso(), linkedInvoice.id));
     if (linkedInvoice.collection_id) {
       statements.push(env.DB.prepare(
         `UPDATE collections SET customer_id=?,client_name=?,amount=?,updated_at=? WHERE id=?`
       ).bind(data.customer_id, data.customer_name, total, nowIso(), linkedInvoice.collection_id));
     }
-    syncedInvoice = { ...linkedInvoice, customer_id: data.customer_id, customer_name: data.customer_name, subtotal, total, items: syncedItems };
+    syncedInvoice = { ...linkedInvoice, customer_id: data.customer_id, customer_name: data.customer_name, responsible: data.responsible, subtotal, serial_total: serialTotal, total, items: syncedItems };
   }
 
   await env.DB.batch(statements);
@@ -1205,15 +1232,17 @@ async function invoiceXlsxResponse(env, id) {
   if (invoice.items.some((item) => item.price_type === "pending")) throw new HttpError("يجب استكمال مراجعة وتسعير الفاتورة أولا", 409);
   const rows = [];
   const addRow = (values, style = "normal", mergeAcross = 0) => rows.push({ values, style, mergeAcross });
-  addRow(["الشركة المصرية للأكواب والعبوات الورقية", "", "", "", "", "", "", ""], "brand", 3);
-  addRow([invoice.transaction_type === "gift" ? "فاتورة هدية / بضاعة مجانية" : "فاتورة"], "title", 8);
-  addRow(["رقم الفاتورة", invoice.id, "التاريخ", invoice.invoice_date || "", "العميل", invoice.customer_name || "", "إذن التسليم", invoice.delivery_note_id], "meta");
-  addRow(["", "", "", "", "", "", "", ""], "normal");
-  addRow(["#", "الصنف", "التصميم", "المقاس", "العدد", "أمر التوريد", "السعر", "الإجمالي"], "header");
-  invoice.items.forEach((item) => addRow([item.line_no, item.product_type, item.design_name || "", item.size_name || "", `${item.quantity_amount || 0} ${item.quantity_unit || ""}`, item.supply_order_id ? `#${item.supply_order_id}` : "", item.unit_price || 0, item.line_total || 0]));
-  addRow(["", "", "", "", "", "", "إجمالي الأصناف", invoice.subtotal || 0], "total");
-  addRow(["", "", "", "", "", "", "مصاريف النقل", invoice.delivery_charge || 0], "total");
-  addRow(["", "", "", "", "", "", "إجمالي الفاتورة", invoice.total || 0], "total");
+  addRow(["الشركة المصرية للأكواب والعبوات الورقية", "", "", "", "", "", "", "", ""], "brand", 3);
+  addRow([invoice.transaction_type === "gift" ? "فاتورة هدية / بضاعة مجانية" : "فاتورة"], "title", 9);
+  addRow(["رقم الفاتورة", invoice.id, "التاريخ", invoice.invoice_date || "", "العميل", invoice.customer_name || "", "المسؤول", invoice.responsible || "", ""], "meta");
+  addRow(["إذن التسليم", invoice.delivery_note_id, "", "", "", "", "", "", ""], "meta");
+  addRow(["", "", "", "", "", "", "", "", ""], "normal");
+  addRow(["#", "الصنف", "التصميم", "المقاس", "العدد", "أمر التوريد", "السعر", "السريل", "الإجمالي"], "header");
+  invoice.items.forEach((item) => addRow([item.line_no, item.product_type, item.design_name || "", item.size_name || "", `${item.quantity_amount || 0} ${item.quantity_unit || ""}`, item.supply_order_id ? `#${item.supply_order_id}` : "", item.unit_price || 0, Number(item.serial_total || 0) > 0 ? item.serial_total : "لا يوجد سريل", item.line_total || 0]));
+  addRow(["", "", "", "", "", "", "", "إجمالي الأصناف", invoice.subtotal || 0], "total");
+  addRow(["", "", "", "", "", "", "", "إجمالي السريل", Number(invoice.serial_total || 0) > 0 ? invoice.serial_total : "لا يوجد سريل"], "total");
+  addRow(["", "", "", "", "", "", "", "مصاريف النقل", invoice.delivery_charge || 0], "total");
+  addRow(["", "", "", "", "", "", "", "إجمالي الفاتورة", invoice.total || 0], "total");
   const prepared = normalizeSheetRows(rows);
   const file = reportXlsx(`فاتورة ${id}`, prepared.rows, prepared.merges, {
     brandLogo: await xlsxBrandLogo(env),
@@ -1232,6 +1261,16 @@ function invoiceData(payload) {
   };
 }
 
+function invoiceSerial(order) {
+  const price = Number(order?.serial_color_price || 0);
+  if (!Number.isFinite(price) || price <= 0) return { price: 0, colors: 0, total: 0 };
+  const normalized = String(order?.cylinder_colors_count || "")
+    .replace(/[٠-٩]/g, (digit) => String("٠١٢٣٤٥٦٧٨٩".indexOf(digit)))
+    .replace(/[۰-۹]/g, (digit) => String("۰۱۲۳۴۵۶۷۸۹".indexOf(digit)));
+  const colors = Math.max(1, Number.parseFloat(normalized.replace(/[^0-9.]/g, "")) || 1);
+  return { price, colors, total: price * colors };
+}
+
 async function createInvoice(request, env, user) {
   const role = effectiveRole(user);
   if (!["admin", "invoice_issuer"].includes(role)) throw new HttpError("ليس لديك صلاحية لإصدار الفواتير", 403);
@@ -1239,9 +1278,9 @@ async function createInvoice(request, env, user) {
   assertAccountingDate(data.invoice_date, "تاريخ الفاتورة");
   const now = nowIso();
   const result = await env.DB.prepare(
-    `INSERT INTO invoices(invoice_date, delivery_note_id, customer_id, customer_name, subtotal, delivery_charge, total, note, created_by, created_at, updated_at)
-     VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-  ).bind(data.invoice_date, data.delivery_note_id, data.customer_id, data.customer_name, data.subtotal, data.delivery_charge, data.total, data.note, user.id, now, now).run();
+    `INSERT INTO invoices(invoice_date, delivery_note_id, customer_id, customer_name, responsible, subtotal, serial_total, delivery_charge, total, note, created_by, created_at, updated_at)
+     VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).bind(data.invoice_date, data.delivery_note_id, data.customer_id, data.customer_name, data.responsible, data.subtotal, data.serial_total, data.delivery_charge, data.total, data.note, user.id, now, now).run();
   const invoiceId = result.meta.last_row_id;
   await insertInvoiceItems(env, invoiceId, data.items);
   await insertAudit(env, request, user, "INSERT", "invoices", invoiceId, null, data);
@@ -1256,29 +1295,30 @@ async function prepareInvoice(env, payload, invoiceId = null) {
   if (!deliveryNote) throw new HttpError("إذن التسليم غير صحيح", 400);
   assertAccountingDate(deliveryNote.delivery_date, "تاريخ إذن التسليم المرتبط");
   if (!deliveryNote.items.length) throw new HttpError("إذن التسليم لا يحتوي على أصناف", 400);
+  if (!RESPONSIBLES.includes(String(deliveryNote.responsible || "").trim())) throw new HttpError("المسؤول غير محدد في إذن التسليم المرتبط", 400);
   const existing = await env.DB.prepare("SELECT id FROM invoices WHERE delivery_note_id = ?").bind(data.delivery_note_id).first();
   if (existing && String(existing.id) !== String(invoiceId || "")) throw new HttpError("تم إصدار فاتورة لهذا إذن التسليم بالفعل", 400);
 
   const payloadItems = new Map(data.items.map((item) => [String(item.delivery_note_item_id), item]));
   const items = [];
   let requiresDeliveryCharge = false;
+  const serialOrders = new Set();
 
   for (const noteItem of deliveryNote.items) {
     const payloadItem = payloadItems.get(String(noteItem.id));
     if (!payloadItem) throw new HttpError(`بيانات الفاتورة ناقصة للسطر ${noteItem.line_no}`, 400);
-    let supplyOrderId = Number(payloadItem.supply_order_id || 0) || null;
+    const supplyOrderId = Number(noteItem.supply_order_id || 0) || null;
     let priceType = String(payloadItem.price_type || "").trim();
     let unitPrice = Number(payloadItem.unit_price || 0);
+    if (!supplyOrderId) throw new HttpError(`يجب ربط السطر ${noteItem.line_no} بأمر توريد من إذن التسليم`, 400);
+    const order = await env.DB.prepare("SELECT * FROM supply_orders WHERE id = ?").bind(supplyOrderId).first();
+    if (!order) throw new HttpError(`أمر التوريد غير صحيح في السطر ${noteItem.line_no}`, 400);
+    if (Number(order.customer_id) !== Number(deliveryNote.customer_id)) throw new HttpError(`أمر التوريد لا يخص نفس العميل في السطر ${noteItem.line_no}`, 400);
 
     if (noteItem.product_type === "غطيان") {
-      supplyOrderId = null;
       priceType = "manual";
       if (!Number.isFinite(unitPrice) || unitPrice < 0) throw new HttpError(`سعر الغطيان غير صحيح في السطر ${noteItem.line_no}`, 400);
     } else {
-      if (!supplyOrderId) throw new HttpError(`أمر التوريد مطلوب في السطر ${noteItem.line_no}`, 400);
-      const order = await env.DB.prepare("SELECT * FROM supply_orders WHERE id = ?").bind(supplyOrderId).first();
-      if (!order) throw new HttpError(`أمر التوريد غير صحيح في السطر ${noteItem.line_no}`, 400);
-      if (Number(order.customer_id) !== Number(deliveryNote.customer_id)) throw new HttpError(`أمر التوريد لا يخص نفس العميل في السطر ${noteItem.line_no}`, 400);
       if (Number(order.design_id) !== Number(noteItem.design_id) || Number(order.size_id) !== Number(noteItem.size_id)) {
         throw new HttpError(`أمر التوريد لا يطابق التصميم والمقاس في السطر ${noteItem.line_no}`, 400);
       }
@@ -1290,6 +1330,8 @@ async function prepareInvoice(env, payload, invoiceId = null) {
 
     const quantity = Number(noteItem.quantity_amount || 0);
     const lineTotal = quantity * unitPrice;
+    const serial = serialOrders.has(String(order.id)) ? { price: 0, colors: 0, total: 0 } : invoiceSerial(order);
+    serialOrders.add(String(order.id));
     items.push({
       delivery_note_item_id: noteItem.id,
       line_no: noteItem.line_no,
@@ -1304,18 +1346,24 @@ async function prepareInvoice(env, payload, invoiceId = null) {
       price_type: priceType,
       unit_price: unitPrice,
       line_total: lineTotal,
+      serial_color_price: serial.price,
+      serial_colors_count: serial.colors,
+      serial_total: serial.total,
     });
   }
 
   if (requiresDeliveryCharge && data.delivery_charge <= 0) throw new HttpError("مصاريف النقل مطلوبة لأن أحد أوامر التوريد النقل فيه على العميل", 400);
   const subtotal = items.reduce((sum, item) => sum + item.line_total, 0);
-  const total = subtotal + data.delivery_charge;
+  const serialTotal = items.reduce((sum, item) => sum + item.serial_total, 0);
+  const total = subtotal + serialTotal + data.delivery_charge;
   return {
     invoice_date: data.invoice_date,
     delivery_note_id: deliveryNote.id,
     customer_id: deliveryNote.customer_id,
     customer_name: deliveryNote.customer_name,
+    responsible: deliveryNote.responsible,
     subtotal,
+    serial_total: serialTotal,
     delivery_charge: data.delivery_charge,
     total,
     note: data.note,
@@ -1326,9 +1374,9 @@ async function prepareInvoice(env, payload, invoiceId = null) {
 async function insertInvoiceItems(env, invoiceId, items) {
   for (const item of items) {
     await env.DB.prepare(
-      `INSERT INTO invoice_items(invoice_id, delivery_note_item_id, line_no, product_type, design_id, design_name, size_id, size_name, quantity_unit, quantity_amount, supply_order_id, price_type, unit_price, line_total)
-       VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    ).bind(invoiceId, item.delivery_note_item_id, item.line_no, item.product_type, item.design_id, item.design_name, item.size_id, item.size_name, item.quantity_unit, item.quantity_amount, item.supply_order_id, item.price_type, item.unit_price, item.line_total).run();
+      `INSERT INTO invoice_items(invoice_id, delivery_note_item_id, line_no, product_type, design_id, design_name, size_id, size_name, quantity_unit, quantity_amount, supply_order_id, price_type, unit_price, line_total, serial_color_price, serial_colors_count, serial_total)
+       VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).bind(invoiceId, item.delivery_note_item_id, item.line_no, item.product_type, item.design_id, item.design_name, item.size_id, item.size_name, item.quantity_unit, item.quantity_amount, item.supply_order_id, item.price_type, item.unit_price, item.line_total, item.serial_color_price || 0, item.serial_colors_count || 0, item.serial_total || 0).run();
   }
 }
 
@@ -1348,9 +1396,9 @@ async function updateInvoice(request, env, user, id) {
   assertAccountingDate(data.invoice_date, "تاريخ الفاتورة");
   await env.DB.prepare(
     `UPDATE invoices
-     SET invoice_date=?, delivery_note_id=?, customer_id=?, customer_name=?, subtotal=?, delivery_charge=?, total=?, note=?, updated_at=?
+     SET invoice_date=?, delivery_note_id=?, customer_id=?, customer_name=?, responsible=?, subtotal=?, serial_total=?, delivery_charge=?, total=?, note=?, updated_at=?
      WHERE id=?`
-  ).bind(data.invoice_date, data.delivery_note_id, data.customer_id, data.customer_name, data.subtotal, data.delivery_charge, data.total, data.note, nowIso(), id).run();
+  ).bind(data.invoice_date, data.delivery_note_id, data.customer_id, data.customer_name, data.responsible, data.subtotal, data.serial_total, data.delivery_charge, data.total, data.note, nowIso(), id).run();
   await env.DB.prepare("DELETE FROM invoice_items WHERE invoice_id = ?").bind(id).run();
   await insertInvoiceItems(env, id, data.items);
   await insertAudit(env, request, user, "UPDATE", "invoices", id, before, data);
@@ -1374,7 +1422,7 @@ async function createDirectSale(request, env, user) {
   const entryDate = parseDateValue(payload.entry_date) || new Date().toISOString().slice(0, 10);
   assertAccountingDate(entryDate, "تاريخ البيع النقدي");
   const responsible = String(payload.responsible || "").trim();
-  const noteResponsible = deliveryResponsible(user, payload.responsible);
+  const noteResponsible = selectedResponsible(payload.responsible);
   const paymentMethod = String(payload.payment_method || "").trim();
   const deliveryCharge = Number(payload.delivery_charge || 0);
   const note = String(payload.note || "").trim() || null;
@@ -1437,8 +1485,8 @@ async function createDirectSale(request, env, user) {
     VALUES(?,(SELECT id FROM customers WHERE normalized_name=?),?,?,?,?,?,?,'direct_cash',?)`).bind(entryDate, customerKey, customerName, noteResponsible, note, user.id, now, now, token));
   for (const item of items) statements.push(env.DB.prepare(`INSERT INTO delivery_note_items(delivery_note_id,line_no,product_type,design_id,design_name,size_id,size_name,quantity_unit,quantity_amount,note)
     VALUES((SELECT id FROM delivery_notes WHERE transaction_token=?),?,?,?,?,?,?,?,?,?)`).bind(token, item.line_no, item.product_type, item.design_id, item.design_name, item.size_id, item.size_name, item.quantity_unit, item.quantity_amount, item.note));
-  statements.push(env.DB.prepare(`INSERT INTO invoices(invoice_date,delivery_note_id,customer_id,customer_name,subtotal,delivery_charge,total,note,created_by,created_at,updated_at,transaction_type,payment_status,transaction_token)
-    VALUES(?,(SELECT id FROM delivery_notes WHERE transaction_token=?),(SELECT id FROM customers WHERE normalized_name=?),?,?,?,?,?,?,?,?,'direct_cash','paid',?)`).bind(entryDate, token, customerKey, customerName, subtotal, deliveryCharge, total, note, user.id, now, now, token));
+  statements.push(env.DB.prepare(`INSERT INTO invoices(invoice_date,delivery_note_id,customer_id,customer_name,responsible,subtotal,delivery_charge,total,note,created_by,created_at,updated_at,transaction_type,payment_status,transaction_token)
+    VALUES(?,(SELECT id FROM delivery_notes WHERE transaction_token=?),(SELECT id FROM customers WHERE normalized_name=?),?,?,?,?,?,?,?,?,?,'direct_cash','paid',?)`).bind(entryDate, token, customerKey, customerName, noteResponsible, subtotal, deliveryCharge, total, note, user.id, now, now, token));
   for (const item of items) statements.push(env.DB.prepare(`INSERT INTO invoice_items(invoice_id,delivery_note_item_id,line_no,product_type,design_id,design_name,size_id,size_name,quantity_unit,quantity_amount,supply_order_id,price_type,unit_price,line_total)
     VALUES((SELECT id FROM invoices WHERE transaction_token=?),(SELECT id FROM delivery_note_items WHERE delivery_note_id=(SELECT id FROM delivery_notes WHERE transaction_token=?) AND line_no=?),?,?,?,?,?,?,?,?,NULL,'manual',?,?)`).bind(token, token, item.line_no, item.line_no, item.product_type, item.design_id, item.design_name, item.size_id, item.size_name, item.quantity_unit, item.quantity_amount, item.unit_price, item.line_total));
   statements.push(env.DB.prepare(`INSERT INTO collections(entry_date,month,responsible,customer_id,client_name,collection_type,amount,payment_method,note,created_at,updated_at,transaction_type,delivery_note_id,invoice_id,transaction_token)
@@ -1456,7 +1504,7 @@ async function createDirectSale(request, env, user) {
 async function createGift(request, env, user) {
   if (!["admin", "collector"].includes(effectiveRole(user))) throw new HttpError("ليس لديك صلاحية لتسجيل الهدية", 403);
   const payload = await readJson(request);
-  const noteResponsible = deliveryResponsible(user, payload.responsible);
+  const noteResponsible = selectedResponsible(payload.responsible);
   const entryDate = parseDateValue(payload.entry_date) || new Date().toISOString().slice(0, 10);
   assertAccountingDate(entryDate, "تاريخ الهدية");
   const userNote = String(payload.note || "").trim();
@@ -1509,8 +1557,8 @@ async function createGift(request, env, user) {
     VALUES(?,(SELECT id FROM customers WHERE normalized_name=?),?,?,?,?,?,?,'gift',?)`).bind(entryDate, customerKey, customerName, noteResponsible, note, user.id, now, now, token));
   for (const item of items) statements.push(env.DB.prepare(`INSERT INTO delivery_note_items(delivery_note_id,line_no,product_type,design_id,design_name,size_id,size_name,quantity_unit,quantity_amount,note)
     VALUES((SELECT id FROM delivery_notes WHERE transaction_token=?),?,?,?,?,?,?,?,?,?)`).bind(token, item.line_no, item.product_type, item.design_id, item.design_name, item.size_id, item.size_name, item.quantity_unit, item.quantity_amount, item.note));
-  statements.push(env.DB.prepare(`INSERT INTO invoices(invoice_date,delivery_note_id,customer_id,customer_name,subtotal,delivery_charge,total,note,created_by,created_at,updated_at,transaction_type,payment_status,transaction_token)
-    VALUES(?,(SELECT id FROM delivery_notes WHERE transaction_token=?),(SELECT id FROM customers WHERE normalized_name=?),?,0,0,0,?,?,?,?,'gift','not_applicable',?)`).bind(entryDate, token, customerKey, customerName, note, user.id, now, now, token));
+  statements.push(env.DB.prepare(`INSERT INTO invoices(invoice_date,delivery_note_id,customer_id,customer_name,responsible,subtotal,delivery_charge,total,note,created_by,created_at,updated_at,transaction_type,payment_status,transaction_token)
+    VALUES(?,(SELECT id FROM delivery_notes WHERE transaction_token=?),(SELECT id FROM customers WHERE normalized_name=?),?,?,0,0,0,?,?,?,?,'gift','not_applicable',?)`).bind(entryDate, token, customerKey, customerName, noteResponsible, note, user.id, now, now, token));
   for (const item of items) statements.push(env.DB.prepare(`INSERT INTO invoice_items(invoice_id,delivery_note_item_id,line_no,product_type,design_id,design_name,size_id,size_name,quantity_unit,quantity_amount,supply_order_id,price_type,unit_price,line_total)
     VALUES((SELECT id FROM invoices WHERE transaction_token=?),(SELECT id FROM delivery_note_items WHERE delivery_note_id=(SELECT id FROM delivery_notes WHERE transaction_token=?) AND line_no=?),?,?,?,?,?,?,?,?,NULL,'gift',0,0)`).bind(token, token, item.line_no, item.line_no, item.product_type, item.design_id, item.design_name, item.size_id, item.size_name, item.quantity_unit, item.quantity_amount));
   await env.DB.batch(statements);
