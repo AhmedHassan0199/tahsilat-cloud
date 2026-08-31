@@ -679,6 +679,7 @@ async function customerStatementXlsx(env, url) {
   const data = await customerStatementData(env, customerId);
   const rows = [];
   const addRow = (values, style = "normal", mergeAcross = 0) => rows.push({ values, style, mergeAcross });
+  addRow(["الشركة المصرية للأكواب والعبوات الورقية", "", "", "", "", ""], "brand", 3);
   addRow(["كشف حساب"], "title", 6);
   addRow(["العميل", data.customer.name, "بداية الفترة", data.period_start, "رصيد بداية المدة", data.totals.opening_balance], "meta");
   addRow(["إجمالي الفواتير", data.totals.invoices, "إجمالي التحصيلات", data.totals.collections, "المتبقي للتحصيل", data.totals.remaining], "total");
@@ -691,7 +692,10 @@ async function customerStatementXlsx(env, url) {
   addRow(["رقم", "التاريخ", "المسؤول", "النوع", "الطريقة", "المبلغ"], "header");
   data.collections.forEach((item) => addRow([item.id, item.entry_date || "", item.responsible || "", item.collection_type || "", item.payment_method || "", item.amount || 0]));
   const prepared = normalizeSheetRows(rows);
-  const file = reportXlsx(`كشف حساب ${data.customer.name}`, prepared.rows, prepared.merges);
+  const file = reportXlsx(`كشف حساب ${data.customer.name}`, prepared.rows, prepared.merges, {
+    brandLogo: await xlsxBrandLogo(env),
+    logoColumn: 4,
+  });
   return xlsxDownload(file, `customer-statement-${data.customer.id}.xlsx`);
 }
 
@@ -1891,8 +1895,8 @@ function worksheetXml(rows, merges, branded = false) {
 ${rows.map((row, index) => xlsxRow(row, index + 1, styleIds[row.style] ?? 0)).join("\n")}
   </sheetData>
   ${merges.length ? `<mergeCells count="${merges.length}">${merges.map((ref) => `<mergeCell ref="${ref}"/>`).join("")}</mergeCells>` : ""}
-  ${branded ? '<drawing r:id="rId1"/>' : ""}
   <pageMargins left="0.7" right="0.7" top="0.75" bottom="0.75" header="0.3" footer="0.3"/>
+  ${branded ? '<drawing r:id="rId1"/>' : ""}
 </worksheet>`;
 }
 
