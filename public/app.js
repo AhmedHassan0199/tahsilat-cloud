@@ -565,10 +565,11 @@ function fillDeliverySupplyOrderSelect(select, current = "") {
   const orders = state.supplyOrders.filter((order) => !customerId || String(order.customer_id) === String(customerId));
   select.innerHTML = `<option value="">اختر أمر التوريد</option>`;
   orders.forEach((order) => {
+    const validResponsible = state.responsibles.includes(order.responsible);
     const option = document.createElement("option");
     option.value = order.id;
-    option.textContent = `#${order.id} - ${order.design_name || "-"} - ${order.size_name || "-"} - ${order.responsible || "المسؤول غير محدد"}`;
-    option.disabled = !order.responsible;
+    option.textContent = `#${order.id} - ${order.design_name || "-"} - ${order.size_name || "-"} - ${validResponsible ? order.responsible : "المسؤول غير محدد"}`;
+    option.disabled = !validResponsible;
     select.appendChild(option);
   });
   select.value = current;
@@ -1144,7 +1145,7 @@ function renderSupplyOrders() {
     <tr>
       <td data-label="رقم">${item.id}</td>
       <td data-label="التاريخ">${item.order_date || "-"} ${isArchivedDate(item.order_date) ? `<span class="archive-badge">قديم - فعال</span>` : ""}</td>
-      <td data-label="المسؤول">${item.responsible || "غير محدد"}</td>
+      <td data-label="المسؤول">${state.responsibles.includes(item.responsible) ? item.responsible : "غير محدد"}</td>
       <td data-label="العميل">${item.customer_name || "-"}</td>
       <td data-label="التصميم">${item.design_name || "-"}</td>
       <td data-label="المقاس">${item.size_name || "-"}</td>
