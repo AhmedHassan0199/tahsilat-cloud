@@ -544,8 +544,16 @@ function fillDeliveryNoteFormLookups() {
   const form = qs("#deliveryNoteForm");
   if (!form) return;
   fillCustomerSelect(form.customer_id, form.customer_id.value);
+  fillOptionalDeliveryResponsible(form.responsible, form.responsible.value);
   fillExistingLookupSelect(form.design_id, state.designs, "اختر التصميم", form.design_id.value);
   fillExistingLookupSelect(form.size_id, state.productSizes, "اختر المقاس", form.size_id.value);
+}
+
+function fillOptionalDeliveryResponsible(select, current = "") {
+  if (!select) return;
+  fillSelect(select, ["", ...state.responsibles], current);
+  select.options[0].textContent = "اسم المستخدم المنشئ تلقائيًا";
+  select.disabled = !isAdmin();
 }
 
 function toggleDeliveryProductType() {
@@ -1107,6 +1115,7 @@ function renderDeliveryNotes() {
       <td data-label="رقم">${item.id}</td>
       <td data-label="التاريخ">${item.delivery_date || "-"} ${archiveBadge(item.delivery_date)}</td>
       <td data-label="العميل">${item.customer_name || "-"} ${item.transaction_type === "gift" ? `<span class="gift-badge">هدية</span>` : ""}</td>
+      <td data-label="المسؤول">${item.responsible || item.created_by_name || "-"}</td>
       <td data-label="عدد الأصناف">${money(item.item_count)}</td>
       <td data-label="إجمالي العدد">${money(item.total_quantity)}</td>
       <td data-label="ملاحظة عامة">${escapeHtml(item.note || "-")}</td>
@@ -1118,7 +1127,7 @@ function renderDeliveryNotes() {
         ${isAdmin() && !isArchivedDate(item.delivery_date) ? `<button class="danger" type="button" data-delete-delivery-note="${item.id}" title="حذف">×</button>` : isAdmin() ? `<span class="muted">للعرض فقط</span>` : ""}
       </td>
     </tr>
-  `).join("") || `<tr><td colspan="8" class="muted">لا توجد أذونات تسليم مسجلة</td></tr>`;
+  `).join("") || `<tr><td colspan="9" class="muted">لا توجد أذونات تسليم مسجلة</td></tr>`;
 }
 
 function renderInvoices() {
@@ -1321,7 +1330,7 @@ function printDeliveryNote(id) {
   const note = state.deliveryNotes.find((row) => String(row.id) === String(id));
   if (!note) return;
   printDocument(`إذن تسليم #${note.id}`, [
-    { type: "meta", rows: [["التاريخ", note.delivery_date || "-"], ["العميل", note.customer_name || "-"], ["ملاحظة عامة", note.note || "-"]] },
+    { type: "meta", rows: [["التاريخ", note.delivery_date || "-"], ["العميل", note.customer_name || "-"], ["المسؤول", note.responsible || note.created_by_name || "-"], ["ملاحظة عامة", note.note || "-"]] },
     { type: "table", title: "الأصناف", headers: ["#", "الصنف", "التصميم", "المقاس", "العدد", "ملاحظة"], rows: (note.items || []).map((item) => [item.line_no, item.product_type, item.design_name || "-", item.size_name || "-", `${money(item.quantity_amount)} ${item.quantity_unit || ""}`, item.note || "-"]) },
   ], { branded: true });
 }
@@ -1378,6 +1387,7 @@ async function loadBootstrap() {
   fillExpenseReportCodes();
   fillSupplyOrderFormLookups();
   fillDeliveryNoteFormLookups();
+  fillOptionalDeliveryResponsible(qs('#giftForm select[name="responsible"]'), qs('#giftForm select[name="responsible"]')?.value);
   fillInvoiceDeliverySelect();
   qsa('select[name="source_method"]').forEach((select) => fillSelect(select, state.paymentMethods));
   qsa('select[name="target_method"]').forEach((select) => fillSelect(select, state.paymentMethods));
@@ -1639,6 +1649,7 @@ function fillDirectSaleForm() {
 function fillGiftForm() {
   const form = qs("#giftForm");
   if (!form) return;
+  fillOptionalDeliveryResponsible(form.responsible, form.responsible.value);
   fillCustomerSelect(form.customer_id, form.customer_id.value);
   fillExistingLookupSelect(form.design_id, state.designs, "اختر التصميم", form.design_id.value);
   fillExistingLookupSelect(form.size_id, state.productSizes, "اختر المقاس", form.size_id.value);
@@ -1694,6 +1705,7 @@ async function saveGift(event) {
   const raw = formData(form);
   const payload = {
     entry_date: raw.entry_date,
+    responsible: raw.responsible,
     customer_id: raw.customer_id,
     manual_customer_name: raw.manual_customer_name,
     save_customer: raw.save_customer,
@@ -1839,6 +1851,7 @@ async function saveDeliveryNote(event) {
   const payload = {
     delivery_date: form.delivery_date.value,
     customer_id: form.customer_id.value,
+    responsible: form.responsible.value,
     note: form.note.value.trim(),
     items,
   };
@@ -2084,6 +2097,7 @@ function editDeliveryNote(id) {
   form.elements.id.value = item.id;
   form.delivery_date.value = item.delivery_date || "";
   fillCustomerSelect(form.customer_id, item.customer_id || "");
+  fillOptionalDeliveryResponsible(form.responsible, item.responsible || "");
   form.note.value = item.note || "";
   state.deliveryDraft = {
     index: 0,

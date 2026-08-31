@@ -175,6 +175,7 @@
             <h2>هدية / بضاعة مجانية</h2>
             <p class="muted section-note">ينشئ إذن تسليم وفاتورة صفرية دون تحصيل أو تأثير على الخزينة.</p>
             <label>التاريخ<input name="entry_date" type="date"></label>
+            <label id="giftResponsibleWrap" class="admin-only">المسؤول في إذن التسليم (اختياري)<select name="responsible"></select></label>
             <label>عميل مسجل (اختياري)<select name="customer_id"></select></label>
             <label id="giftManualCustomerWrap">اسم العميل يدويًا<input name="manual_customer_name" autocomplete="off"></label>
             <label class="check" id="giftSaveCustomerWrap"><input name="save_customer" type="checkbox"> حفظ العميل في قائمة العملاء</label>
@@ -294,6 +295,7 @@
             <input type="hidden" name="id">
             <label>التاريخ<input name="delivery_date" type="date"></label>
             <label>العميل<select name="customer_id" required></select></label>
+            <label id="deliveryResponsibleWrap" class="admin-only">المسؤول (اختياري)<select name="responsible"></select></label>
             <div class="line-card">
               <div class="line-card-head">
                 <strong id="deliveryItemCounter">الصنف 1 من 1</strong>
@@ -330,7 +332,7 @@
             <div class="panel-head" data-page-pane="display"><h2>أذونات التسليم المسجلة</h2><div class="filters"><select id="deliveryNoteCustomerFilter"><option value="">كل العملاء</option></select></div></div>
             <div class="table-wrap records" data-page-pane="display">
               <table>
-                <thead><tr><th>رقم</th><th>التاريخ</th><th>العميل</th><th>عدد الأصناف</th><th>إجمالي العدد</th><th>ملاحظة عامة</th><th>المستخدم</th><th></th></tr></thead>
+                <thead><tr><th>رقم</th><th>التاريخ</th><th>العميل</th><th>المسؤول</th><th>عدد الأصناف</th><th>إجمالي العدد</th><th>ملاحظة عامة</th><th>المستخدم</th><th></th></tr></thead>
                 <tbody id="deliveryNoteRows"></tbody>
               </table>
             </div>

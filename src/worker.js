@@ -4,7 +4,7 @@ const PASSWORD_ITERATIONS = 20000;
 const JSON_HEADERS = { "content-type": "application/json; charset=utf-8" };
 const ACCOUNTING_START_DATE = "2026-09-01";
 
-const RESPONSIBLES = ["نورا", "محمد حسن", "المصريه"];
+const RESPONSIBLES = ["ا/ نورا السيد", "ا/ محمد حسن", "الشركة المصرية"];
 const COLLECTION_TYPES = ["كرومو", "منتج تام علب", "منتج تام اكواب", "قص", "طباعة", "دشت", "أخرى"];
 const CUSTODY_METHOD = "عهدة";
 const CRC32_TABLE = Array.from({ length: 256 }, (_, index) => {
@@ -970,7 +970,7 @@ async function deliveryNoteXlsxResponse(env, id) {
   addRow(["الشركة المصرية للأكواب والعبوات الورقية", "", "", "", "", ""], "brand", 3);
   addRow([note.transaction_type === "gift" ? "إذن تسليم - هدية / بضاعة مجانية" : "إذن تسليم"], "title", 6);
   addRow(["رقم الإذن", note.id, "التاريخ", note.delivery_date || "", "العميل", note.customer_name || ""], "meta");
-  addRow(["ملاحظة عامة", note.note || "", "", "", "", ""], "meta");
+  addRow(["المسؤول", note.responsible || "", "ملاحظة عامة", note.note || "", "", ""], "meta");
   addRow(["", "", "", "", "", ""], "normal");
   addRow(["#", "الصنف", "التصميم", "المقاس", "العدد", "ملاحظة"], "header");
   note.items.forEach((item) => addRow([item.line_no, item.product_type, item.design_name || "", item.size_name || "", `${item.quantity_amount || 0} ${item.quantity_unit || ""}`, item.note || ""]));
@@ -982,10 +982,17 @@ async function deliveryNoteXlsxResponse(env, id) {
   return xlsxDownload(file, `delivery-note-${id}.xlsx`);
 }
 
-function deliveryNoteData(payload) {
+function deliveryResponsible(user, requestedValue) {
+  const requested = String(requestedValue || "").trim();
+  if (effectiveRole(user) === "admin" && RESPONSIBLES.includes(requested)) return requested;
+  return String(user?.display_name || "").trim();
+}
+
+function deliveryNoteData(payload, user) {
   return {
     delivery_date: parseDateValue(payload.delivery_date) || new Date().toISOString().slice(0, 10),
     customer_id: Number(payload.customer_id || 0) || null,
+    responsible: deliveryResponsible(user, payload.responsible),
     note: String(payload.note || "").trim() || null,
     items: Array.isArray(payload.items) ? payload.items : [],
   };
@@ -1006,13 +1013,13 @@ function deliveryItemData(payload, index) {
 
 async function createDeliveryNote(request, env, user) {
   assertCanWrite(user, { allowCollector: true });
-  const data = await prepareDeliveryNote(env, await readJson(request));
+  const data = await prepareDeliveryNote(env, await readJson(request), user);
   assertAccountingDate(data.delivery_date, "تاريخ إذن التسليم");
   const now = nowIso();
   const result = await env.DB.prepare(
-    `INSERT INTO delivery_notes(delivery_date, customer_id, customer_name, note, created_by, created_at, updated_at)
-     VALUES(?, ?, ?, ?, ?, ?, ?)`
-  ).bind(data.delivery_date, data.customer_id, data.customer_name, data.note, user.id, now, now).run();
+    `INSERT INTO delivery_notes(delivery_date, customer_id, customer_name, responsible, note, created_by, created_at, updated_at)
+     VALUES(?, ?, ?, ?, ?, ?, ?, ?)`
+  ).bind(data.delivery_date, data.customer_id, data.customer_name, data.responsible, data.note, user.id, now, now).run();
   const deliveryNoteId = result.meta.last_row_id;
 
   await insertDeliveryNoteItems(env, deliveryNoteId, data.items);
@@ -1020,9 +1027,10 @@ async function createDeliveryNote(request, env, user) {
   return json({ id: deliveryNoteId, item_count: data.items.length });
 }
 
-async function prepareDeliveryNote(env, payload) {
-  const data = deliveryNoteData(payload);
+async function prepareDeliveryNote(env, payload, user) {
+  const data = deliveryNoteData(payload, user);
   if (!data.customer_id) throw new HttpError("العميل مطلوب", 400);
+  if (!data.responsible) throw new HttpError("المسؤول غير متاح", 400);
   if (!data.items.length) throw new HttpError("يجب إضافة صنف واحد على الأقل في إذن التسليم", 400);
   const customer = await env.DB.prepare("SELECT id, name FROM customers WHERE id = ? AND active = 1").bind(data.customer_id).first();
   if (!customer) throw new HttpError("العميل غير صحيح", 400);
@@ -1082,7 +1090,7 @@ async function updateDeliveryNote(request, env, user, id) {
   const before = await deliveryNoteWithItems(env, id);
   if (!before) throw new HttpError("Record not found", 404);
   assertRecordNotArchived(before, "delivery_date");
-  const data = await prepareDeliveryNote(env, await readJson(request));
+  const data = await prepareDeliveryNote(env, await readJson(request), user);
   assertAccountingDate(data.delivery_date, "تاريخ إذن التسليم");
   const linkedInvoiceRow = await env.DB.prepare("SELECT id FROM invoices WHERE delivery_note_id = ?").bind(id).first();
   const linkedInvoice = linkedInvoiceRow ? await invoiceWithItems(env, linkedInvoiceRow.id) : null;
@@ -1090,9 +1098,9 @@ async function updateDeliveryNote(request, env, user, id) {
 
   const statements = [env.DB.prepare(
     `UPDATE delivery_notes
-     SET delivery_date=?, customer_id=?, customer_name=?, note=?, updated_at=?
+     SET delivery_date=?, customer_id=?, customer_name=?, responsible=?, note=?, updated_at=?
      WHERE id=?`
-  ).bind(data.delivery_date, data.customer_id, data.customer_name, data.note, nowIso(), id)];
+  ).bind(data.delivery_date, data.customer_id, data.customer_name, data.responsible, data.note, nowIso(), id)];
 
   if (linkedInvoice) statements.push(env.DB.prepare("DELETE FROM invoice_items WHERE invoice_id = ?").bind(linkedInvoice.id));
   statements.push(env.DB.prepare("DELETE FROM delivery_note_items WHERE delivery_note_id = ?").bind(id));
@@ -1366,6 +1374,7 @@ async function createDirectSale(request, env, user) {
   const entryDate = parseDateValue(payload.entry_date) || new Date().toISOString().slice(0, 10);
   assertAccountingDate(entryDate, "تاريخ البيع النقدي");
   const responsible = String(payload.responsible || "").trim();
+  const noteResponsible = deliveryResponsible(user, payload.responsible);
   const paymentMethod = String(payload.payment_method || "").trim();
   const deliveryCharge = Number(payload.delivery_charge || 0);
   const note = String(payload.note || "").trim() || null;
@@ -1424,8 +1433,8 @@ async function createDirectSale(request, env, user) {
     statements.push(env.DB.prepare(`INSERT INTO customers(name,normalized_name,active,is_transient,created_at,updated_at) VALUES(?,?,?, ?,?,?)`)
       .bind(customerName, customerKey, truthy(payload.save_customer) ? 1 : 0, truthy(payload.save_customer) ? 0 : 1, now, now));
   }
-  statements.push(env.DB.prepare(`INSERT INTO delivery_notes(delivery_date,customer_id,customer_name,note,created_by,created_at,updated_at,transaction_type,transaction_token)
-    VALUES(?,(SELECT id FROM customers WHERE normalized_name=?),?,?,?,?,?,'direct_cash',?)`).bind(entryDate, customerKey, customerName, note, user.id, now, now, token));
+  statements.push(env.DB.prepare(`INSERT INTO delivery_notes(delivery_date,customer_id,customer_name,responsible,note,created_by,created_at,updated_at,transaction_type,transaction_token)
+    VALUES(?,(SELECT id FROM customers WHERE normalized_name=?),?,?,?,?,?,?,'direct_cash',?)`).bind(entryDate, customerKey, customerName, noteResponsible, note, user.id, now, now, token));
   for (const item of items) statements.push(env.DB.prepare(`INSERT INTO delivery_note_items(delivery_note_id,line_no,product_type,design_id,design_name,size_id,size_name,quantity_unit,quantity_amount,note)
     VALUES((SELECT id FROM delivery_notes WHERE transaction_token=?),?,?,?,?,?,?,?,?,?)`).bind(token, item.line_no, item.product_type, item.design_id, item.design_name, item.size_id, item.size_name, item.quantity_unit, item.quantity_amount, item.note));
   statements.push(env.DB.prepare(`INSERT INTO invoices(invoice_date,delivery_note_id,customer_id,customer_name,subtotal,delivery_charge,total,note,created_by,created_at,updated_at,transaction_type,payment_status,transaction_token)
@@ -1447,6 +1456,7 @@ async function createDirectSale(request, env, user) {
 async function createGift(request, env, user) {
   if (!["admin", "collector"].includes(effectiveRole(user))) throw new HttpError("ليس لديك صلاحية لتسجيل الهدية", 403);
   const payload = await readJson(request);
+  const noteResponsible = deliveryResponsible(user, payload.responsible);
   const entryDate = parseDateValue(payload.entry_date) || new Date().toISOString().slice(0, 10);
   assertAccountingDate(entryDate, "تاريخ الهدية");
   const userNote = String(payload.note || "").trim();
@@ -1495,8 +1505,8 @@ async function createGift(request, env, user) {
   const statements = [];
   if (!customer) statements.push(env.DB.prepare("INSERT INTO customers(name,normalized_name,active,is_transient,created_at,updated_at) VALUES(?,?,?,?,?,?)")
     .bind(customerName, customerKey, truthy(payload.save_customer) ? 1 : 0, truthy(payload.save_customer) ? 0 : 1, now, now));
-  statements.push(env.DB.prepare(`INSERT INTO delivery_notes(delivery_date,customer_id,customer_name,note,created_by,created_at,updated_at,transaction_type,transaction_token)
-    VALUES(?,(SELECT id FROM customers WHERE normalized_name=?),?,?,?,?,?,'gift',?)`).bind(entryDate, customerKey, customerName, note, user.id, now, now, token));
+  statements.push(env.DB.prepare(`INSERT INTO delivery_notes(delivery_date,customer_id,customer_name,responsible,note,created_by,created_at,updated_at,transaction_type,transaction_token)
+    VALUES(?,(SELECT id FROM customers WHERE normalized_name=?),?,?,?,?,?,?,'gift',?)`).bind(entryDate, customerKey, customerName, noteResponsible, note, user.id, now, now, token));
   for (const item of items) statements.push(env.DB.prepare(`INSERT INTO delivery_note_items(delivery_note_id,line_no,product_type,design_id,design_name,size_id,size_name,quantity_unit,quantity_amount,note)
     VALUES((SELECT id FROM delivery_notes WHERE transaction_token=?),?,?,?,?,?,?,?,?,?)`).bind(token, item.line_no, item.product_type, item.design_id, item.design_name, item.size_id, item.size_name, item.quantity_unit, item.quantity_amount, item.note));
   statements.push(env.DB.prepare(`INSERT INTO invoices(invoice_date,delivery_note_id,customer_id,customer_name,subtotal,delivery_charge,total,note,created_by,created_at,updated_at,transaction_type,payment_status,transaction_token)
@@ -1729,9 +1739,9 @@ async function responsibleMonthlyReport(env) {
   const result = await env.DB.prepare(
     `WITH months(m) AS (VALUES (1),(2),(3),(4),(5),(6),(7),(8),(9),(10),(11),(12))
      SELECT m AS month,
-       COALESCE((SELECT SUM(amount) FROM collections WHERE month=m AND responsible='نورا'),0) AS noura,
-       COALESCE((SELECT SUM(amount) FROM collections WHERE month=m AND responsible='محمد حسن'),0) AS mohamed_hassan,
-       COALESCE((SELECT SUM(amount) FROM collections WHERE month=m AND responsible='المصريه'),0) AS egyptian,
+       COALESCE((SELECT SUM(amount) FROM collections WHERE month=m AND responsible='ا/ نورا السيد'),0) AS noura,
+       COALESCE((SELECT SUM(amount) FROM collections WHERE month=m AND responsible='ا/ محمد حسن'),0) AS mohamed_hassan,
+       COALESCE((SELECT SUM(amount) FROM collections WHERE month=m AND responsible='الشركة المصرية'),0) AS egyptian,
        COALESCE((SELECT SUM(amount) FROM collections WHERE month=m),0) AS total
      FROM months
      ORDER BY m`
