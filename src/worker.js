@@ -1133,9 +1133,20 @@ async function updateDeliveryNote(request, env, user, id) {
   let requiresInvoiceReview = false;
   let syncedInvoice = null;
   if (linkedInvoice) {
+    const gift = linkedInvoice.transaction_type === "gift";
+    const supplyOrders = new Map();
+    if (!gift) {
+      for (const item of data.items) {
+        const supplyOrderId = Number(item.supply_order_id || 0);
+        if (!supplyOrderId || supplyOrders.has(String(supplyOrderId))) continue;
+        const order = await env.DB.prepare("SELECT * FROM supply_orders WHERE id = ?").bind(supplyOrderId).first();
+        if (order) supplyOrders.set(String(supplyOrderId), order);
+      }
+    }
     const oldNoteItems = new Map(before.items.map((item) => [String(item.id), item]));
     const oldInvoiceItems = new Map(linkedInvoice.items.map((item) => [String(item.delivery_note_item_id), item]));
     const customerChanged = Number(before.customer_id) !== Number(data.customer_id);
+    const serialOrders = new Set();
     const syncedItems = data.items.map((item) => {
       const oldNoteItem = item.source_item_id ? oldNoteItems.get(String(item.source_item_id)) : null;
       const oldInvoiceItem = item.source_item_id ? oldInvoiceItems.get(String(item.source_item_id)) : null;
@@ -1145,21 +1156,23 @@ async function updateDeliveryNote(request, env, user, id) {
         || Number(oldNoteItem.size_id || 0) !== Number(item.size_id || 0)
         || Number(oldNoteItem.supply_order_id || 0) !== Number(item.supply_order_id || 0);
       if (identityChanged) requiresInvoiceReview = linkedInvoice.transaction_type !== "gift";
-      const gift = linkedInvoice.transaction_type === "gift";
       const preservePrice = !identityChanged && oldInvoiceItem;
       const unitPrice = gift ? 0 : preservePrice ? Number(oldInvoiceItem.unit_price || 0) : 0;
-      const serialColorPrice = gift ? 0 : preservePrice ? Number(oldInvoiceItem.serial_color_price || 0) : 0;
-      const serialColorsCount = gift ? 0 : preservePrice ? Number(oldInvoiceItem.serial_colors_count || 0) : 0;
-      const serialTotal = gift ? 0 : preservePrice ? Number(oldInvoiceItem.serial_total || 0) : 0;
+      const orderKey = String(item.supply_order_id || "");
+      const order = supplyOrders.get(orderKey);
+      const serial = gift || !order || serialOrders.has(orderKey)
+        ? { price: 0, colors: 0, total: 0 }
+        : invoiceSerial(order);
+      if (order) serialOrders.add(orderKey);
       return {
         ...item,
         supply_order_id: gift ? null : item.supply_order_id,
         price_type: gift ? "gift" : preservePrice ? oldInvoiceItem.price_type : "pending",
         unit_price: unitPrice,
         line_total: Number(item.quantity_amount || 0) * unitPrice,
-        serial_color_price: serialColorPrice,
-        serial_colors_count: serialColorsCount,
-        serial_total: serialTotal,
+        serial_color_price: serial.price,
+        serial_colors_count: serial.colors,
+        serial_total: serial.total,
       };
     });
     const subtotal = syncedItems.reduce((sum, item) => sum + item.line_total, 0);
