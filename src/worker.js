@@ -963,6 +963,7 @@ async function deliveryNoteXlsxResponse(env, id) {
   if (!note) throw new HttpError("Record not found", 404);
   const rows = [];
   const addRow = (values, style = "normal", mergeAcross = 0) => rows.push({ values, style, mergeAcross });
+  addRow(["الشركة المصرية للأكواب والعبوات الورقية", "", "", "", "", ""], "brand", 3);
   addRow([note.transaction_type === "gift" ? "إذن تسليم - هدية / بضاعة مجانية" : "إذن تسليم"], "title", 6);
   addRow(["رقم الإذن", note.id, "التاريخ", note.delivery_date || "", "العميل", note.customer_name || ""], "meta");
   addRow(["ملاحظة عامة", note.note || "", "", "", "", ""], "meta");
@@ -970,7 +971,10 @@ async function deliveryNoteXlsxResponse(env, id) {
   addRow(["#", "الصنف", "التصميم", "المقاس", "العدد", "ملاحظة"], "header");
   note.items.forEach((item) => addRow([item.line_no, item.product_type, item.design_name || "", item.size_name || "", `${item.quantity_amount || 0} ${item.quantity_unit || ""}`, item.note || ""]));
   const prepared = normalizeSheetRows(rows);
-  const file = reportXlsx(`إذن تسليم ${id}`, prepared.rows, prepared.merges);
+  const file = reportXlsx(`إذن تسليم ${id}`, prepared.rows, prepared.merges, {
+    brandLogo: await xlsxBrandLogo(env),
+    logoColumn: 4,
+  });
   return xlsxDownload(file, `delivery-note-${id}.xlsx`);
 }
 
@@ -1189,6 +1193,7 @@ async function invoiceXlsxResponse(env, id) {
   if (invoice.items.some((item) => item.price_type === "pending")) throw new HttpError("يجب استكمال مراجعة وتسعير الفاتورة أولا", 409);
   const rows = [];
   const addRow = (values, style = "normal", mergeAcross = 0) => rows.push({ values, style, mergeAcross });
+  addRow(["الشركة المصرية للأكواب والعبوات الورقية", "", "", "", "", "", "", ""], "brand", 3);
   addRow([invoice.transaction_type === "gift" ? "فاتورة هدية / بضاعة مجانية" : "فاتورة"], "title", 8);
   addRow(["رقم الفاتورة", invoice.id, "التاريخ", invoice.invoice_date || "", "العميل", invoice.customer_name || "", "إذن التسليم", invoice.delivery_note_id], "meta");
   addRow(["", "", "", "", "", "", "", ""], "normal");
@@ -1198,7 +1203,10 @@ async function invoiceXlsxResponse(env, id) {
   addRow(["", "", "", "", "", "", "مصاريف النقل", invoice.delivery_charge || 0], "total");
   addRow(["", "", "", "", "", "", "إجمالي الفاتورة", invoice.total || 0], "total");
   const prepared = normalizeSheetRows(rows);
-  const file = reportXlsx(`فاتورة ${id}`, prepared.rows, prepared.merges);
+  const file = reportXlsx(`فاتورة ${id}`, prepared.rows, prepared.merges, {
+    brandLogo: await xlsxBrandLogo(env),
+    logoColumn: 6,
+  });
   return xlsxDownload(file, `invoice-${id}.xlsx`);
 }
 
@@ -1737,17 +1745,33 @@ function collectionXlsx(data) {
   return reportXlsx("تقرير التحصيلات", rows, merges);
 }
 
-function reportXlsx(title, rows, merges) {
+async function xlsxBrandLogo(env) {
+  try {
+    const response = await env.ASSETS.fetch(new Request("https://assets.local/epc-logo.png"));
+    return response.ok ? new Uint8Array(await response.arrayBuffer()) : null;
+  } catch {
+    return null;
+  }
+}
+
+function reportXlsx(title, rows, merges, options = {}) {
+  const branded = options.brandLogo instanceof Uint8Array && options.brandLogo.length > 0;
   const files = {
-    "[Content_Types].xml": contentTypesXml(),
+    "[Content_Types].xml": contentTypesXml(branded),
     "_rels/.rels": rootRelsXml(),
     "docProps/core.xml": corePropsXml(title),
     "docProps/app.xml": appPropsXml(),
     "xl/workbook.xml": workbookXml(title),
     "xl/_rels/workbook.xml.rels": workbookRelsXml(),
     "xl/styles.xml": workbookStylesXml(),
-    "xl/worksheets/sheet1.xml": worksheetXml(rows, merges),
+    "xl/worksheets/sheet1.xml": worksheetXml(rows, merges, branded),
   };
+  if (branded) {
+    files["xl/media/image1.png"] = options.brandLogo;
+    files["xl/drawings/drawing1.xml"] = drawingXml(options.logoColumn || 0);
+    files["xl/drawings/_rels/drawing1.xml.rels"] = drawingRelsXml();
+    files["xl/worksheets/_rels/sheet1.xml.rels"] = worksheetRelsXml();
+  }
   return zipStore(files);
 }
 
@@ -1857,8 +1881,8 @@ function expenseSheetRows(data) {
   return { rows, merges };
 }
 
-function worksheetXml(rows, merges) {
-  const styleIds = { normal: 0, title: 1, section: 2, header: 3, meta: 4, total: 5 };
+function worksheetXml(rows, merges, branded = false) {
+  const styleIds = { normal: 0, title: 1, section: 2, header: 3, meta: 4, total: 5, brand: 6 };
   return `<?xml version="1.0" encoding="UTF-8"?>
 <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
   <sheetViews><sheetView rightToLeft="1" workbookViewId="0"/></sheetViews>
@@ -1867,12 +1891,14 @@ function worksheetXml(rows, merges) {
 ${rows.map((row, index) => xlsxRow(row, index + 1, styleIds[row.style] ?? 0)).join("\n")}
   </sheetData>
   ${merges.length ? `<mergeCells count="${merges.length}">${merges.map((ref) => `<mergeCell ref="${ref}"/>`).join("")}</mergeCells>` : ""}
+  ${branded ? '<drawing r:id="rId1"/>' : ""}
   <pageMargins left="0.7" right="0.7" top="0.75" bottom="0.75" header="0.3" footer="0.3"/>
 </worksheet>`;
 }
 
 function xlsxRow(row, rowNumber, styleId) {
-  return `    <row r="${rowNumber}">${row.values.map((value, index) => xlsxCell(value, `${columnName(index + 1)}${rowNumber}`, styleId)).join("")}</row>`;
+  const height = row.style === "brand" ? ' ht="62" customHeight="1"' : "";
+  return `    <row r="${rowNumber}"${height}>${row.values.map((value, index) => xlsxCell(value, `${columnName(index + 1)}${rowNumber}`, styleId)).join("")}</row>`;
 }
 
 function xlsxCell(value, ref, styleId) {
@@ -1893,14 +1919,16 @@ function columnName(index) {
   return name;
 }
 
-function contentTypesXml() {
+function contentTypesXml(branded = false) {
   return `<?xml version="1.0" encoding="UTF-8"?>
 <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
   <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
   <Default Extension="xml" ContentType="application/xml"/>
+  ${branded ? '<Default Extension="png" ContentType="image/png"/>' : ""}
   <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
   <Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
   <Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>
+  ${branded ? '<Override PartName="/xl/drawings/drawing1.xml" ContentType="application/vnd.openxmlformats-officedocument.drawing+xml"/>' : ""}
   <Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/>
   <Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/>
 </Types>`;
@@ -1935,20 +1963,51 @@ function workbookRelsXml() {
 function workbookStylesXml() {
   return `<?xml version="1.0" encoding="UTF-8"?>
 <styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
-  <fonts count="3"><font><sz val="11"/><name val="Arial"/></font><font><b/><sz val="16"/><name val="Arial"/></font><font><b/><sz val="12"/><name val="Arial"/></font></fonts>
+  <fonts count="4"><font><sz val="11"/><name val="Arial"/></font><font><b/><sz val="16"/><name val="Arial"/></font><font><b/><sz val="12"/><name val="Arial"/></font><font><b/><sz val="15"/><name val="Arial"/><color rgb="FF111827"/></font></fonts>
   <fills count="5"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FFD9EAF7"/><bgColor indexed="64"/></patternFill></fill><fill><patternFill patternType="solid"><fgColor rgb="FFE2F0D9"/><bgColor indexed="64"/></patternFill></fill><fill><patternFill patternType="solid"><fgColor rgb="FFFFF2CC"/><bgColor indexed="64"/></patternFill></fill></fills>
   <borders count="2"><border><left/><right/><top/><bottom/><diagonal/></border><border><left style="thin"><color rgb="FFA6A6A6"/></left><right style="thin"><color rgb="FFA6A6A6"/></right><top style="thin"><color rgb="FFA6A6A6"/></top><bottom style="thin"><color rgb="FFA6A6A6"/></bottom><diagonal/></border></borders>
   <cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>
-  <cellXfs count="6">
+  <cellXfs count="7">
     <xf numFmtId="0" fontId="0" fillId="0" borderId="1" xfId="0" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>
     <xf numFmtId="0" fontId="1" fillId="2" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>
     <xf numFmtId="0" fontId="2" fillId="3" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>
     <xf numFmtId="0" fontId="2" fillId="0" borderId="1" xfId="0" applyFont="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>
     <xf numFmtId="0" fontId="2" fillId="0" borderId="1" xfId="0" applyFont="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>
     <xf numFmtId="0" fontId="2" fillId="4" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>
+    <xf numFmtId="0" fontId="3" fillId="0" borderId="0" xfId="0" applyFont="1" applyAlignment="1"><alignment horizontal="right" vertical="center" wrapText="1"/></xf>
   </cellXfs>
   <cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>
 </styleSheet>`;
+}
+
+function worksheetRelsXml() {
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing" Target="../drawings/drawing1.xml"/>
+</Relationships>`;
+}
+
+function drawingRelsXml() {
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/image1.png"/>
+</Relationships>`;
+}
+
+function drawingXml(column) {
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <xdr:oneCellAnchor>
+    <xdr:from><xdr:col>${column}</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>0</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from>
+    <xdr:ext cx="685800" cy="762000"/>
+    <xdr:pic>
+      <xdr:nvPicPr><xdr:cNvPr id="1" name="EPC Logo"/><xdr:cNvPicPr/></xdr:nvPicPr>
+      <xdr:blipFill><a:blip r:embed="rId1"/><a:stretch><a:fillRect/></a:stretch></xdr:blipFill>
+      <xdr:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="685800" cy="762000"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></xdr:spPr>
+    </xdr:pic>
+    <xdr:clientData/>
+  </xdr:oneCellAnchor>
+</xdr:wsDr>`;
 }
 
 function corePropsXml(title = "تقرير") {
