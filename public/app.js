@@ -1267,7 +1267,7 @@ function escapeHtml(value) {
   })[char]);
 }
 
-function printDocument(title, blocks) {
+function printDocument(title, blocks, options = {}) {
   const win = window.open("", "_blank");
   if (!win) {
     showToast("اسمح بفتح النوافذ المنبثقة لطباعة PDF", true);
@@ -1285,6 +1285,12 @@ function printDocument(title, blocks) {
     }
     return "";
   }).join("");
+  const brandedHeader = options.branded ? `
+    <header class="document-brand">
+      <div class="company-name">الشركة المصرية للأكواب والعبوات الورقية</div>
+      <div class="brand-spacer" aria-hidden="true"></div>
+      <img class="document-logo" src="/epc-logo.png" alt="EPC Egyptian paper cups">
+    </header>` : "";
   win.document.write(`<!doctype html><html lang="ar" dir="rtl"><head><meta charset="utf-8"><title>${escapeHtml(title)}</title><style>
     body{font-family:Arial,Tahoma,sans-serif;margin:24px;color:#111827}
     h1{font-size:24px;margin:0 0 18px;text-align:center}
@@ -1295,8 +1301,11 @@ function printDocument(title, blocks) {
     .meta,.totals{display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin-bottom:12px}
     .meta div,.totals div{border:1px solid #d0d5dd;padding:8px}
     dt{color:#667085;font-size:12px} dd{margin:2px 0 0;font-weight:bold}
+    .document-brand{direction:rtl;display:grid;grid-template-columns:1fr 1fr 1fr;align-items:center;gap:16px;border-bottom:2px solid #2f9e44;padding:0 0 12px;margin:0 0 14px}
+    .company-name{font-size:19px;font-weight:700;line-height:1.6;text-align:right}
+    .document-logo{display:block;width:105px;height:82px;object-fit:contain;justify-self:end}
     @media print{button{display:none} body{margin:10mm}}
-  </style></head><body><h1>${escapeHtml(title)}</h1>${content}<script>window.onload=()=>setTimeout(()=>window.print(),250)</script></body></html>`);
+  </style></head><body>${brandedHeader}<h1>${escapeHtml(title)}</h1>${content}<script>window.onload=()=>setTimeout(()=>window.print(),250)</script></body></html>`);
   win.document.close();
 }
 
@@ -1314,7 +1323,7 @@ function printDeliveryNote(id) {
   printDocument(`إذن تسليم #${note.id}`, [
     { type: "meta", rows: [["التاريخ", note.delivery_date || "-"], ["العميل", note.customer_name || "-"], ["ملاحظة عامة", note.note || "-"]] },
     { type: "table", title: "الأصناف", headers: ["#", "الصنف", "التصميم", "المقاس", "العدد", "ملاحظة"], rows: (note.items || []).map((item) => [item.line_no, item.product_type, item.design_name || "-", item.size_name || "-", `${money(item.quantity_amount)} ${item.quantity_unit || ""}`, item.note || "-"]) },
-  ]);
+  ], { branded: true });
 }
 
 function printInvoice(id) {
@@ -1324,7 +1333,7 @@ function printInvoice(id) {
     { type: "meta", rows: [["التاريخ", invoice.invoice_date || "-"], ["العميل", invoice.customer_name || "-"], ["إذن التسليم", `#${invoice.delivery_note_id}`]] },
     { type: "table", title: "الأصناف", headers: ["#", "الصنف", "التصميم", "المقاس", "العدد", "أمر التوريد", "السعر", "الإجمالي"], rows: (invoice.items || []).map((item) => [item.line_no, item.product_type, item.design_name || "-", item.size_name || "-", `${money(item.quantity_amount)} ${item.quantity_unit || ""}`, item.supply_order_id ? `#${item.supply_order_id}` : "-", money(item.unit_price), money(item.line_total)]) },
     { type: "totals", rows: [["إجمالي الأصناف", money(invoice.subtotal)], ["مصاريف النقل", money(invoice.delivery_charge)], ["إجمالي الفاتورة", money(invoice.total)]] },
-  ]);
+  ], { branded: true });
 }
 
 function printCustomerStatement() {
