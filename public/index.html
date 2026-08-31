@@ -225,7 +225,7 @@
             </div>
             <div class="table-wrap records">
               <table>
-                <thead><tr><th>العميل</th><th>إجمالي التحصيل</th><th>عدد التحصيلات</th><th>آخر تحصيل</th></tr></thead>
+                <thead><tr><th>العميل</th><th>رصيد بداية المدة</th><th>الرصيد الحالي</th><th>تحصيلات الفترة</th><th>آخر تحصيل</th></tr></thead>
                 <tbody id="customerRows"></tbody>
               </table>
             </div>
@@ -375,10 +375,12 @@
             </div>
           </div>
           <section class="metrics statement-metrics">
+            <div class="metric"><span>رصيد بداية المدة</span><strong id="statementOpeningBalance">0</strong></div>
             <div class="metric"><span>إجمالي الفواتير</span><strong id="statementInvoiceTotal">0</strong></div>
             <div class="metric"><span>إجمالي التحصيلات</span><strong id="statementCollectionTotal">0</strong></div>
             <div class="metric accent"><span>المتبقي للتحصيل</span><strong id="statementRemaining">0</strong></div>
           </section>
+          <p class="muted section-note">يبدأ كشف الحساب من <strong id="statementPeriodStart">2026-09-01</strong>. الحركات الأقدم محفوظة في صفحاتها للأرشيف ولا تظهر هنا.</p>
           <div class="grid two">
             <div>
               <div class="panel-head"><h2>الفواتير المستحقة</h2></div>

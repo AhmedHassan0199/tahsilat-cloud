@@ -2,6 +2,7 @@ const SESSION_COOKIE = "tahsilat_session";
 const SESSION_DAYS = 7;
 const PASSWORD_ITERATIONS = 20000;
 const JSON_HEADERS = { "content-type": "application/json; charset=utf-8" };
+const ACCOUNTING_START_DATE = "2026-09-01";
 
 const RESPONSIBLES = ["نورا", "محمد حسن", "المصريه"];
 const COLLECTION_TYPES = ["كرومو", "منتج تام علب", "منتج تام اكواب", "قص", "طباعة", "دشت", "أخرى"];
@@ -208,6 +209,18 @@ function monthFromDate(value) {
   return Number(value.slice(5, 7));
 }
 
+function assertAccountingDate(value, label = "تاريخ الحركة") {
+  if (!value || value < ACCOUNTING_START_DATE) {
+    throw new HttpError(`${label} يجب ألا يسبق ${ACCOUNTING_START_DATE}`, 400);
+  }
+}
+
+function assertRecordNotArchived(record, dateColumn) {
+  if (!record?.[dateColumn] || record[dateColumn] < ACCOUNTING_START_DATE) {
+    throw new HttpError("هذا السجل مؤرشف للعرض فقط ولا يمكن تعديله أو حذفه", 409);
+  }
+}
+
 function clientIp(request) {
   return request.headers.get("cf-connecting-ip") || request.headers.get("x-forwarded-for") || "";
 }
@@ -334,6 +347,7 @@ async function bootstrap(env, user) {
     product_sizes: productSizes.results,
     materials: materials.results,
     users: users.results,
+    accounting_start_date: ACCOUNTING_START_DATE,
     responsibles: planner ? [] : RESPONSIBLES,
     collection_types: planner ? [] : COLLECTION_TYPES,
     user,
@@ -341,7 +355,8 @@ async function bootstrap(env, user) {
 }
 
 async function dashboard(env, url) {
-  const from = parseDateValue(url.searchParams.get("from"));
+  const requestedFrom = parseDateValue(url.searchParams.get("from"));
+  const from = !requestedFrom || requestedFrom < ACCOUNTING_START_DATE ? ACCOUNTING_START_DATE : requestedFrom;
   const to = parseDateValue(url.searchParams.get("to"));
   const granularity = url.searchParams.get("granularity") === "day" ? "day" : "month";
   if (from && to && from > to) throw new HttpError("تاريخ البداية يجب أن يسبق تاريخ النهاية", 400);
@@ -621,15 +636,19 @@ async function listCollections(env, url) {
 async function listCustomers(env) {
   const result = await env.DB.prepare(
     `SELECT customers.id, customers.name, customers.active, customers.created_at,
-            COALESCE(SUM(collections.amount), 0) AS total_collections,
-            COUNT(collections.id) AS collection_count,
-            MAX(collections.entry_date) AS last_collection_date
+            COALESCE(opening.opening_balance, 0) AS opening_balance,
+            COALESCE(period_invoices.total, 0) AS period_invoices,
+            COALESCE(period_collections.total, 0) AS period_collections,
+            COALESCE(period_collections.count, 0) AS collection_count,
+            period_collections.last_date AS last_collection_date,
+            COALESCE(opening.opening_balance, 0) + COALESCE(period_invoices.total, 0) - COALESCE(period_collections.total, 0) AS current_balance
      FROM customers
-     LEFT JOIN collections ON collections.customer_id = customers.id
+     LEFT JOIN customer_opening_balances opening ON opening.customer_id = customers.id AND opening.effective_date = ?
+     LEFT JOIN (SELECT customer_id, SUM(total) AS total FROM invoices WHERE invoice_date >= ? GROUP BY customer_id) period_invoices ON period_invoices.customer_id = customers.id
+     LEFT JOIN (SELECT customer_id, SUM(amount) AS total, COUNT(*) AS count, MAX(entry_date) AS last_date FROM collections WHERE entry_date >= ? GROUP BY customer_id) period_collections ON period_collections.customer_id = customers.id
      WHERE customers.active = 1
-     GROUP BY customers.id
-     ORDER BY total_collections DESC, collection_count DESC, customers.name`
-  ).all();
+     ORDER BY current_balance DESC, customers.name`
+  ).bind(ACCOUNTING_START_DATE, ACCOUNTING_START_DATE, ACCOUNTING_START_DATE).all();
   return json({ items: result.results });
 }
 
@@ -661,8 +680,8 @@ async function customerStatementXlsx(env, url) {
   const rows = [];
   const addRow = (values, style = "normal", mergeAcross = 0) => rows.push({ values, style, mergeAcross });
   addRow(["كشف حساب"], "title", 6);
-  addRow(["العميل", data.customer.name, "إجمالي الفواتير", data.totals.invoices, "إجمالي التحصيلات", data.totals.collections], "meta");
-  addRow(["المتبقي للتحصيل", data.totals.remaining, "", "", "", ""], "total");
+  addRow(["العميل", data.customer.name, "بداية الفترة", data.period_start, "رصيد بداية المدة", data.totals.opening_balance], "meta");
+  addRow(["إجمالي الفواتير", data.totals.invoices, "إجمالي التحصيلات", data.totals.collections, "المتبقي للتحصيل", data.totals.remaining], "total");
   addRow(["", "", "", "", "", ""], "normal");
   addRow(["الفواتير"], "section", 6);
   addRow(["رقم الفاتورة", "التاريخ", "إذن التسليم", "إجمالي الأصناف", "مصاريف النقل", "الإجمالي"], "header");
@@ -678,30 +697,37 @@ async function customerStatementXlsx(env, url) {
 
 async function customerStatementData(env, customerId) {
   if (!customerId) throw new HttpError("العميل مطلوب", 400);
-  const customer = await env.DB.prepare("SELECT id, name FROM customers WHERE id = ? AND active = 1").bind(customerId).first();
+  const customer = await env.DB.prepare(
+    `SELECT customers.id, customers.name, COALESCE(opening.opening_balance, 0) AS opening_balance
+     FROM customers
+     LEFT JOIN customer_opening_balances opening ON opening.customer_id=customers.id AND opening.effective_date=?
+     WHERE customers.id=? AND customers.active=1`
+  ).bind(ACCOUNTING_START_DATE, customerId).first();
   if (!customer) throw new HttpError("العميل غير صحيح", 400);
   const invoices = await env.DB.prepare(
     `SELECT id, invoice_date, delivery_note_id, subtotal, delivery_charge, total, note, created_at
      FROM invoices
-     WHERE customer_id = ?
+     WHERE customer_id = ? AND invoice_date >= ?
      ORDER BY COALESCE(invoice_date, '') DESC, id DESC`
-  ).bind(customerId).all();
+  ).bind(customerId, ACCOUNTING_START_DATE).all();
   const collections = await env.DB.prepare(
     `SELECT id, entry_date, responsible, collection_type, amount, payment_method, note, created_at
      FROM collections
-     WHERE customer_id = ?
+     WHERE customer_id = ? AND entry_date >= ?
      ORDER BY COALESCE(entry_date, '') DESC, id DESC`
-  ).bind(customerId).all();
+  ).bind(customerId, ACCOUNTING_START_DATE).all();
   const totalInvoices = invoices.results.reduce((sum, item) => sum + Number(item.total || 0), 0);
   const totalCollections = collections.results.reduce((sum, item) => sum + Number(item.amount || 0), 0);
   return {
     customer,
+    period_start: ACCOUNTING_START_DATE,
     invoices: invoices.results,
     collections: collections.results,
     totals: {
+      opening_balance: Number(customer.opening_balance || 0),
       invoices: totalInvoices,
       collections: totalCollections,
-      remaining: totalInvoices - totalCollections,
+      remaining: Number(customer.opening_balance || 0) + totalInvoices - totalCollections,
     },
   };
 }
@@ -972,6 +998,7 @@ function deliveryItemData(payload, index) {
 async function createDeliveryNote(request, env, user) {
   assertCanWrite(user, { allowCollector: true });
   const data = await prepareDeliveryNote(env, await readJson(request));
+  assertAccountingDate(data.delivery_date, "تاريخ إذن التسليم");
   const now = nowIso();
   const result = await env.DB.prepare(
     `INSERT INTO delivery_notes(delivery_date, customer_id, customer_name, note, created_by, created_at, updated_at)
@@ -1045,7 +1072,9 @@ async function updateDeliveryNote(request, env, user, id) {
   assertCanWrite(user);
   const before = await deliveryNoteWithItems(env, id);
   if (!before) throw new HttpError("Record not found", 404);
+  assertRecordNotArchived(before, "delivery_date");
   const data = await prepareDeliveryNote(env, await readJson(request));
+  assertAccountingDate(data.delivery_date, "تاريخ إذن التسليم");
   await env.DB.prepare(
     `UPDATE delivery_notes
      SET delivery_date=?, customer_id=?, customer_name=?, note=?, updated_at=?
@@ -1061,6 +1090,7 @@ async function deleteDeliveryNote(env, user, id) {
   assertCanWrite(user);
   const before = await deliveryNoteWithItems(env, id);
   if (!before) throw new HttpError("Record not found", 404);
+  assertRecordNotArchived(before, "delivery_date");
   await env.DB.prepare("DELETE FROM delivery_note_items WHERE delivery_note_id = ?").bind(id).run();
   await env.DB.prepare("DELETE FROM delivery_notes WHERE id = ?").bind(id).run();
   await insertAudit(env, null, user, "DELETE", "delivery_notes", id, before, null);
@@ -1123,6 +1153,7 @@ async function createInvoice(request, env, user) {
   const role = effectiveRole(user);
   if (!["admin", "invoice_issuer"].includes(role)) throw new HttpError("ليس لديك صلاحية لإصدار الفواتير", 403);
   const data = await prepareInvoice(env, await readJson(request));
+  assertAccountingDate(data.invoice_date, "تاريخ الفاتورة");
   const now = nowIso();
   const result = await env.DB.prepare(
     `INSERT INTO invoices(invoice_date, delivery_note_id, customer_id, customer_name, subtotal, delivery_charge, total, note, created_by, created_at, updated_at)
@@ -1140,6 +1171,7 @@ async function prepareInvoice(env, payload, invoiceId = null) {
   if (!Number.isFinite(data.delivery_charge) || data.delivery_charge < 0) throw new HttpError("مصاريف النقل غير صحيحة", 400);
   const deliveryNote = await deliveryNoteWithItems(env, data.delivery_note_id);
   if (!deliveryNote) throw new HttpError("إذن التسليم غير صحيح", 400);
+  assertAccountingDate(deliveryNote.delivery_date, "تاريخ إذن التسليم المرتبط");
   if (!deliveryNote.items.length) throw new HttpError("إذن التسليم لا يحتوي على أصناف", 400);
   const existing = await env.DB.prepare("SELECT id FROM invoices WHERE delivery_note_id = ?").bind(data.delivery_note_id).first();
   if (existing && String(existing.id) !== String(invoiceId || "")) throw new HttpError("تم إصدار فاتورة لهذا إذن التسليم بالفعل", 400);
@@ -1228,7 +1260,9 @@ async function updateInvoice(request, env, user, id) {
   assertCanWrite(user);
   const before = await invoiceWithItems(env, id);
   if (!before) throw new HttpError("Record not found", 404);
+  assertRecordNotArchived(before, "invoice_date");
   const data = await prepareInvoice(env, await readJson(request), id);
+  assertAccountingDate(data.invoice_date, "تاريخ الفاتورة");
   await env.DB.prepare(
     `UPDATE invoices
      SET invoice_date=?, delivery_note_id=?, customer_id=?, customer_name=?, subtotal=?, delivery_charge=?, total=?, note=?, updated_at=?
@@ -1244,6 +1278,7 @@ async function deleteInvoice(env, user, id) {
   assertCanWrite(user);
   const before = await invoiceWithItems(env, id);
   if (!before) throw new HttpError("Record not found", 404);
+  assertRecordNotArchived(before, "invoice_date");
   await env.DB.prepare("DELETE FROM invoice_items WHERE invoice_id = ?").bind(id).run();
   await env.DB.prepare("DELETE FROM invoices WHERE id = ?").bind(id).run();
   await insertAudit(env, null, user, "DELETE", "invoices", id, before, null);
@@ -1254,6 +1289,7 @@ async function createDirectSale(request, env, user) {
   if (!["admin", "collector"].includes(effectiveRole(user))) throw new HttpError("ليس لديك صلاحية لتسجيل البيع النقدي", 403);
   const payload = await readJson(request);
   const entryDate = parseDateValue(payload.entry_date) || new Date().toISOString().slice(0, 10);
+  assertAccountingDate(entryDate, "تاريخ البيع النقدي");
   const responsible = String(payload.responsible || "").trim();
   const paymentMethod = String(payload.payment_method || "").trim();
   const deliveryCharge = Number(payload.delivery_charge || 0);
@@ -1337,6 +1373,7 @@ async function createGift(request, env, user) {
   if (!["admin", "collector"].includes(effectiveRole(user))) throw new HttpError("ليس لديك صلاحية لتسجيل الهدية", 403);
   const payload = await readJson(request);
   const entryDate = parseDateValue(payload.entry_date) || new Date().toISOString().slice(0, 10);
+  assertAccountingDate(entryDate, "تاريخ الهدية");
   const userNote = String(payload.note || "").trim();
   const note = userNote ? `هدية / بضاعة مجانية - ${userNote}` : "هدية / بضاعة مجانية";
   const token = crypto.randomUUID();
@@ -1401,6 +1438,7 @@ async function createCollection(request, env, user) {
   assertCanWrite(user, { allowCollector: true });
   const data = await applyCollectionCustody(env, await applyCustomer(env, collectionData(await readJson(request))));
   validateCollection(data);
+  assertAccountingDate(data.entry_date, "تاريخ التحصيل");
   const now = nowIso();
   const result = await env.DB.prepare(
     `INSERT INTO collections(entry_date, month, responsible, customer_id, client_name, collection_type, collection_type_other, amount, payment_method, note, created_at, updated_at)
@@ -1414,8 +1452,10 @@ async function updateCollection(request, env, user, id) {
   assertCanWrite(user);
   const before = await env.DB.prepare("SELECT * FROM collections WHERE id = ?").bind(id).first();
   if (!before) throw new HttpError("Record not found", 404);
+  assertRecordNotArchived(before, "entry_date");
   const data = await applyCollectionCustody(env, await applyCustomer(env, collectionData(await readJson(request))));
   validateCollection(data);
+  assertAccountingDate(data.entry_date, "تاريخ التحصيل");
   await env.DB.prepare(
     `UPDATE collections
      SET entry_date=?, month=?, responsible=?, customer_id=?, client_name=?, collection_type=?, collection_type_other=?, amount=?, payment_method=?, note=?, updated_at=?
@@ -1465,6 +1505,10 @@ async function deleteRecord(env, user, tableName, entity, id) {
   assertCanWrite(user);
   const before = await env.DB.prepare(`SELECT * FROM ${tableName} WHERE id = ?`).bind(id).first();
   if (!before) throw new HttpError("Record not found", 404);
+  if (tableName === "collections") assertRecordNotArchived(before, "entry_date");
+  if (tableName === "supply_orders" && (!before.order_date || before.order_date < ACCOUNTING_START_DATE)) {
+    throw new HttpError("أمر التوريد القديم يظل متاحًا للاستخدام والتعديل ولا يمكن حذفه", 409);
+  }
   await env.DB.prepare(`DELETE FROM ${tableName} WHERE id = ?`).bind(id).run();
   await insertAudit(env, null, user, "DELETE", tableName, id, before, null);
   return json({ ok: true });

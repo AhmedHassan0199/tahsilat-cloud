@@ -24,6 +24,7 @@ const state = {
   collectionReport: null,
   responsibleMonthly: [],
   dashboardFilters: { from: "", to: "", granularity: "month" },
+  accountingStartDate: "2026-09-01",
   user: null,
 };
 
@@ -313,8 +314,17 @@ function setCollectionMode(mode) {
   qsa(".collection-mode-panel").forEach((panel) => panel.classList.toggle("hidden", panel.dataset.collectionPanel !== selected));
 }
 
-function adminRecordActions(editAttribute, deleteAttribute, id) {
+function isArchivedDate(value) {
+  return Boolean(value && value < state.accountingStartDate);
+}
+
+function archiveBadge(value) {
+  return isArchivedDate(value) ? `<span class="archive-badge">أرشيف</span>` : "";
+}
+
+function adminRecordActions(editAttribute, deleteAttribute, id, recordDate = null) {
   if (!isAdmin()) return "";
+  if (isArchivedDate(recordDate)) return `<span class="muted">للعرض فقط</span>`;
   return `
     <button type="button" ${editAttribute}="${id}" title="تعديل">✎</button>
     <button class="danger" type="button" ${deleteAttribute}="${id}" title="حذف">×</button>
@@ -610,6 +620,7 @@ function fillInvoiceDeliverySelect() {
   const invoiced = new Set(state.invoices.map((invoice) => String(invoice.delivery_note_id)));
   select.innerHTML = `<option value="">اختر إذن التسليم</option>`;
   state.deliveryNotes.forEach((note) => {
+    if (isArchivedDate(note.delivery_date)) return;
     if (invoiced.has(String(note.id)) && String(note.id) !== String(editingInvoice?.delivery_note_id || "")) return;
     const option = document.createElement("option");
     option.value = note.id;
@@ -633,6 +644,26 @@ function selectedDeliveryNote() {
   return state.deliveryNotes.find((note) => String(note.id) === String(id));
 }
 
+function applyAccountingDateConstraints() {
+  const today = new Date().toISOString().slice(0, 10);
+  const defaultDate = today < state.accountingStartDate ? state.accountingStartDate : today;
+  [
+    "#collectionForm input[name='entry_date']",
+    "#directSaleForm input[name='entry_date']",
+    "#giftForm input[name='entry_date']",
+    "#deliveryNoteForm input[name='delivery_date']",
+    "#invoiceForm input[name='invoice_date']",
+  ].forEach((selector) => {
+    const input = qs(selector);
+    if (!input) return;
+    input.min = state.accountingStartDate;
+    if (!input.value) input.value = defaultDate;
+  });
+  [qs("#dashboardFrom"), qs("#dashboardTo")].forEach((input) => {
+    if (input) input.min = state.accountingStartDate;
+  });
+}
+
 function resetInvoiceForm() {
   const form = qs("#invoiceForm");
   if (!form) return;
@@ -643,6 +674,7 @@ function resetInvoiceForm() {
   state.invoiceDraft = null;
   fillInvoiceDeliverySelect();
   renderInvoiceEditor();
+  applyAccountingDateConstraints();
 }
 
 function buildInvoiceDraft(note) {
@@ -960,14 +992,14 @@ function expenseQuery() {
 function renderCollections() {
   qs("#collectionRows").innerHTML = state.collections.map((item) => `
     <tr>
-      <td data-label="التاريخ">${item.entry_date || "-"}</td>
+      <td data-label="التاريخ">${item.entry_date || "-"} ${archiveBadge(item.entry_date)}</td>
       <td data-label="الشهر">${item.month || "-"}</td>
       <td data-label="المسؤول">${item.responsible}</td>
       <td data-label="العميل">${item.client_name}</td>
       <td data-label="نوع التحصيل">${item.collection_type || "-"}</td>
       <td data-label="المبلغ">${money(item.amount)}</td>
       <td data-label="الطريقة">${item.payment_method}</td>
-      <td class="actions">${adminRecordActions("data-edit-collection", "data-delete-collection", item.id)}</td>
+      <td class="actions">${adminRecordActions("data-edit-collection", "data-delete-collection", item.id, item.entry_date)}</td>
     </tr>
   `).join("") || `<tr><td colspan="8" class="muted">لا توجد تحصيلات مطابقة</td></tr>`;
 }
@@ -982,11 +1014,12 @@ function renderCustomers() {
   body.innerHTML = customers.map((item) => `
     <tr>
       <td data-label="العميل">${escapeHtml(item.name)}</td>
-      <td data-label="إجمالي التحصيل">${money(item.total_collections)}</td>
-      <td data-label="عدد التحصيلات">${money(item.collection_count)}</td>
+      <td data-label="رصيد بداية المدة">${money(item.opening_balance)}</td>
+      <td data-label="الرصيد الحالي">${money(item.current_balance)}</td>
+      <td data-label="تحصيلات الفترة">${money(item.period_collections)}</td>
       <td data-label="آخر تحصيل">${escapeHtml(item.last_collection_date || "-")}</td>
     </tr>
-  `).join("") || `<tr><td colspan="4" class="muted">${query ? "لا يوجد عميل مطابق للبحث" : "لا توجد بيانات عملاء"}</td></tr>`;
+  `).join("") || `<tr><td colspan="5" class="muted">${query ? "لا يوجد عميل مطابق للبحث" : "لا توجد بيانات عملاء"}</td></tr>`;
 }
 
 function renderExpenses() {
@@ -1041,7 +1074,7 @@ function renderSupplyOrders() {
   body.innerHTML = items.map((item) => `
     <tr>
       <td data-label="رقم">${item.id}</td>
-      <td data-label="التاريخ">${item.order_date || "-"}</td>
+      <td data-label="التاريخ">${item.order_date || "-"} ${isArchivedDate(item.order_date) ? `<span class="archive-badge">قديم - فعال</span>` : ""}</td>
       <td data-label="العميل">${item.customer_name || "-"}</td>
       <td data-label="التصميم">${item.design_name || "-"}</td>
       <td data-label="المقاس">${item.size_name || "-"}</td>
@@ -1055,7 +1088,7 @@ function renderSupplyOrders() {
         ${canEditSupplyOrders() ? `<button type="button" data-edit-supply-order="${item.id}" title="تعديل">✎</button>` : ""}
         <button type="button" data-xlsx-supply-order="${item.id}" title="Excel">Excel</button>
         <button type="button" data-pdf-supply-order="${item.id}" title="PDF">PDF</button>
-        ${isAdmin() ? `<button class="danger" type="button" data-delete-supply-order="${item.id}" title="حذف">×</button>` : ""}
+        ${isAdmin() && !isArchivedDate(item.order_date) ? `<button class="danger" type="button" data-delete-supply-order="${item.id}" title="حذف">×</button>` : ""}
       </td>
     </tr>
   `).join("") || `<tr><td colspan="12" class="muted">لا توجد أوامر توريد مسجلة</td></tr>`;
@@ -1070,17 +1103,17 @@ function renderDeliveryNotes() {
   body.innerHTML = items.map((item) => `
     <tr>
       <td data-label="رقم">${item.id}</td>
-      <td data-label="التاريخ">${item.delivery_date || "-"}</td>
+      <td data-label="التاريخ">${item.delivery_date || "-"} ${archiveBadge(item.delivery_date)}</td>
       <td data-label="العميل">${item.customer_name || "-"} ${item.transaction_type === "gift" ? `<span class="gift-badge">هدية</span>` : ""}</td>
       <td data-label="عدد الأصناف">${money(item.item_count)}</td>
       <td data-label="إجمالي العدد">${money(item.total_quantity)}</td>
       <td data-label="ملاحظة عامة">${escapeHtml(item.note || "-")}</td>
       <td data-label="المستخدم">${item.created_by_name || "-"}</td>
       <td class="actions">
-        ${isAdmin() ? `<button type="button" data-edit-delivery-note="${item.id}" title="تعديل">✎</button>` : ""}
+        ${isAdmin() && !isArchivedDate(item.delivery_date) ? `<button type="button" data-edit-delivery-note="${item.id}" title="تعديل">✎</button>` : ""}
         <button type="button" data-xlsx-delivery-note="${item.id}" title="Excel">Excel</button>
         <button type="button" data-pdf-delivery-note="${item.id}" title="PDF">PDF</button>
-        ${isAdmin() ? `<button class="danger" type="button" data-delete-delivery-note="${item.id}" title="حذف">×</button>` : ""}
+        ${isAdmin() && !isArchivedDate(item.delivery_date) ? `<button class="danger" type="button" data-delete-delivery-note="${item.id}" title="حذف">×</button>` : isAdmin() ? `<span class="muted">للعرض فقط</span>` : ""}
       </td>
     </tr>
   `).join("") || `<tr><td colspan="8" class="muted">لا توجد أذونات تسليم مسجلة</td></tr>`;
@@ -1095,17 +1128,17 @@ function renderInvoices() {
   body.innerHTML = items.map((item) => `
     <tr>
       <td data-label="رقم">${item.id}</td>
-      <td data-label="التاريخ">${item.invoice_date || "-"}</td>
+      <td data-label="التاريخ">${item.invoice_date || "-"} ${archiveBadge(item.invoice_date)}</td>
       <td data-label="إذن التسليم">#${item.delivery_note_id}</td>
       <td data-label="العميل">${item.customer_name || "-"}</td>
       <td data-label="الأصناف">${money(item.item_count)}</td>
       <td data-label="الإجمالي">${money(item.total)} ${item.transaction_type === "gift" ? `<span class="gift-badge">مجانية</span>` : ""}</td>
       <td data-label="المستخدم">${item.created_by_name || "-"}</td>
       <td class="actions">
-        ${isAdmin() ? `<button type="button" data-edit-invoice="${item.id}" title="تعديل">✎</button>` : ""}
+        ${isAdmin() && !isArchivedDate(item.invoice_date) ? `<button type="button" data-edit-invoice="${item.id}" title="تعديل">✎</button>` : ""}
         <button type="button" data-xlsx-invoice="${item.id}" title="Excel">Excel</button>
         <button type="button" data-pdf-invoice="${item.id}" title="PDF">PDF</button>
-        ${isAdmin() ? `<button class="danger" type="button" data-delete-invoice="${item.id}" title="حذف">×</button>` : ""}
+        ${isAdmin() && !isArchivedDate(item.invoice_date) ? `<button class="danger" type="button" data-delete-invoice="${item.id}" title="حذف">×</button>` : isAdmin() ? `<span class="muted">للعرض فقط</span>` : ""}
       </td>
     </tr>
   `).join("") || `<tr><td colspan="8" class="muted">لا توجد فواتير مسجلة</td></tr>`;
@@ -1157,9 +1190,11 @@ function renderCollectionReport() {
 
 function renderCustomerStatement() {
   const data = state.customerStatement;
+  qs("#statementOpeningBalance").textContent = money(data?.totals?.opening_balance || 0);
   qs("#statementInvoiceTotal").textContent = money(data?.totals?.invoices || 0);
   qs("#statementCollectionTotal").textContent = money(data?.totals?.collections || 0);
   qs("#statementRemaining").textContent = money(data?.totals?.remaining || 0);
+  qs("#statementPeriodStart").textContent = data?.period_start || state.accountingStartDate;
 
   const invoiceBody = qs("#statementInvoiceRows");
   if (invoiceBody) {
@@ -1295,7 +1330,7 @@ function printCustomerStatement() {
   const data = state.customerStatement;
   if (!data) throw new Error("اعرض كشف الحساب أولا");
   printDocument(`كشف حساب ${data.customer.name}`, [
-    { type: "totals", rows: [["إجمالي الفواتير", money(data.totals.invoices)], ["إجمالي التحصيلات", money(data.totals.collections)], ["المتبقي للتحصيل", money(data.totals.remaining)]] },
+    { type: "totals", rows: [["بداية الفترة", data.period_start], ["رصيد بداية المدة", money(data.totals.opening_balance)], ["إجمالي الفواتير", money(data.totals.invoices)], ["إجمالي التحصيلات", money(data.totals.collections)], ["المتبقي للتحصيل", money(data.totals.remaining)]] },
     { type: "table", title: "الفواتير", headers: ["رقم", "التاريخ", "إذن التسليم", "الإجمالي", "ملاحظة"], rows: data.invoices.map((item) => [`#${item.id}`, item.invoice_date || "-", `#${item.delivery_note_id}`, money(item.total), item.note || "-"]) },
     { type: "table", title: "التحصيلات", headers: ["رقم", "التاريخ", "المسؤول", "النوع", "المبلغ", "الطريقة"], rows: data.collections.map((item) => [`#${item.id}`, item.entry_date || "-", item.responsible || "-", item.collection_type || "-", money(item.amount), item.payment_method || "-"]) },
   ]);
@@ -1313,6 +1348,7 @@ async function loadBootstrap() {
   state.collectionTypes = data.collection_types || [];
   state.responsibles = data.responsibles;
   state.user = data.user;
+  state.accountingStartDate = data.accounting_start_date || "2026-09-01";
   applyRolePermissions();
   qsa('select[name="responsible"]').forEach((select) => fillSelect(select, state.responsibles));
   qsa('select[name="customer_id"]').forEach((select) => fillCustomerSelect(select, select.value));
@@ -1515,6 +1551,7 @@ function resetCollectionForm() {
   fillSelect(form.payment_method, state.paymentMethods);
   toggleCollectionOtherType();
   toggleCollectionCustody();
+  applyAccountingDateConstraints();
 }
 
 function directSaleItemMarkup(index) {
@@ -1633,6 +1670,7 @@ async function saveDirectSale(event) {
   };
   const result = await api("/api/direct-sales", { method: "POST", body: JSON.stringify(payload) });
   form.reset();
+  applyAccountingDateConstraints();
   qs("#directSaleItems").replaceChildren();
   fillDirectSaleForm();
   showToast(`تم إصدار الفاتورة #${result.invoice_id} وتسجيل التحصيل`);
@@ -1654,6 +1692,7 @@ async function saveGift(event) {
   };
   const result = await api("/api/gifts", { method: "POST", body: JSON.stringify(payload) });
   form.reset();
+  applyAccountingDateConstraints();
   fillGiftForm();
   showToast(`تم إصدار فاتورة الهدية #${result.invoice_id} بقيمة صفر`);
   await Promise.all([loadBootstrap(), loadDeliveryNotes(), loadInvoices()]);
@@ -1695,6 +1734,7 @@ function resetDeliveryNoteForm() {
   fillDirectSaleForm();
   fillGiftForm();
   showDeliveryItem(0);
+  applyAccountingDateConstraints();
 }
 
 async function saveCollection(event) {
@@ -2388,6 +2428,7 @@ async function init() {
     resetSupplyOrderForm();
     resetDeliveryNoteForm();
     resetInvoiceForm();
+    applyAccountingDateConstraints();
     renderCustomerStatement();
     showApp();
     showToast("النظام جاهز");
