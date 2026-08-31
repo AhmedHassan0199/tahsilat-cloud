@@ -985,6 +985,7 @@ function deliveryNoteData(payload) {
 
 function deliveryItemData(payload, index) {
   return {
+    source_item_id: Number(payload.source_item_id || 0) || null,
     line_no: index + 1,
     product_type: ["كوبايات - علب", "غطيان"].includes(payload.product_type) ? payload.product_type : "",
     design_id: Number(payload.design_id || 0) || null,
@@ -1075,15 +1076,75 @@ async function updateDeliveryNote(request, env, user, id) {
   assertRecordNotArchived(before, "delivery_date");
   const data = await prepareDeliveryNote(env, await readJson(request));
   assertAccountingDate(data.delivery_date, "تاريخ إذن التسليم");
-  await env.DB.prepare(
+  const linkedInvoiceRow = await env.DB.prepare("SELECT id FROM invoices WHERE delivery_note_id = ?").bind(id).first();
+  const linkedInvoice = linkedInvoiceRow ? await invoiceWithItems(env, linkedInvoiceRow.id) : null;
+  if (linkedInvoice) assertRecordNotArchived(linkedInvoice, "invoice_date");
+
+  const statements = [env.DB.prepare(
     `UPDATE delivery_notes
      SET delivery_date=?, customer_id=?, customer_name=?, note=?, updated_at=?
      WHERE id=?`
-  ).bind(data.delivery_date, data.customer_id, data.customer_name, data.note, nowIso(), id).run();
-  await env.DB.prepare("DELETE FROM delivery_note_items WHERE delivery_note_id = ?").bind(id).run();
-  await insertDeliveryNoteItems(env, id, data.items);
+  ).bind(data.delivery_date, data.customer_id, data.customer_name, data.note, nowIso(), id)];
+
+  if (linkedInvoice) statements.push(env.DB.prepare("DELETE FROM invoice_items WHERE invoice_id = ?").bind(linkedInvoice.id));
+  statements.push(env.DB.prepare("DELETE FROM delivery_note_items WHERE delivery_note_id = ?").bind(id));
+  for (const item of data.items) {
+    statements.push(env.DB.prepare(
+      `INSERT INTO delivery_note_items(delivery_note_id,line_no,product_type,design_id,design_name,size_id,size_name,quantity_unit,quantity_amount,note)
+       VALUES(?,?,?,?,?,?,?,?,?,?)`
+    ).bind(id, item.line_no, item.product_type, item.design_id, item.design_name, item.size_id, item.size_name, item.quantity_unit, item.quantity_amount, item.note));
+  }
+
+  let requiresInvoiceReview = false;
+  let syncedInvoice = null;
+  if (linkedInvoice) {
+    const oldNoteItems = new Map(before.items.map((item) => [String(item.id), item]));
+    const oldInvoiceItems = new Map(linkedInvoice.items.map((item) => [String(item.delivery_note_item_id), item]));
+    const customerChanged = Number(before.customer_id) !== Number(data.customer_id);
+    const syncedItems = data.items.map((item) => {
+      const oldNoteItem = item.source_item_id ? oldNoteItems.get(String(item.source_item_id)) : null;
+      const oldInvoiceItem = item.source_item_id ? oldInvoiceItems.get(String(item.source_item_id)) : null;
+      const identityChanged = customerChanged || !oldNoteItem || !oldInvoiceItem
+        || oldNoteItem.product_type !== item.product_type
+        || Number(oldNoteItem.design_id || 0) !== Number(item.design_id || 0)
+        || Number(oldNoteItem.size_id || 0) !== Number(item.size_id || 0);
+      if (identityChanged) requiresInvoiceReview = linkedInvoice.transaction_type !== "gift";
+      const gift = linkedInvoice.transaction_type === "gift";
+      const preservePrice = !identityChanged && oldInvoiceItem;
+      const unitPrice = gift ? 0 : preservePrice ? Number(oldInvoiceItem.unit_price || 0) : 0;
+      return {
+        ...item,
+        supply_order_id: gift ? null : preservePrice ? oldInvoiceItem.supply_order_id : null,
+        price_type: gift ? "gift" : preservePrice ? oldInvoiceItem.price_type : "pending",
+        unit_price: unitPrice,
+        line_total: Number(item.quantity_amount || 0) * unitPrice,
+      };
+    });
+    const subtotal = syncedItems.reduce((sum, item) => sum + item.line_total, 0);
+    const total = subtotal + Number(linkedInvoice.delivery_charge || 0);
+    for (const item of syncedItems) {
+      statements.push(env.DB.prepare(
+        `INSERT INTO invoice_items(invoice_id,delivery_note_item_id,line_no,product_type,design_id,design_name,size_id,size_name,quantity_unit,quantity_amount,supply_order_id,price_type,unit_price,line_total)
+         VALUES(?,(SELECT id FROM delivery_note_items WHERE delivery_note_id=? AND line_no=?),?,?,?,?,?,?,?,?,?,?,?,?)`
+      ).bind(linkedInvoice.id, id, item.line_no, item.line_no, item.product_type, item.design_id, item.design_name, item.size_id, item.size_name, item.quantity_unit, item.quantity_amount, item.supply_order_id, item.price_type, item.unit_price, item.line_total));
+    }
+    statements.push(env.DB.prepare(
+      `UPDATE invoices SET customer_id=?,customer_name=?,subtotal=?,total=?,updated_at=? WHERE id=?`
+    ).bind(data.customer_id, data.customer_name, subtotal, total, nowIso(), linkedInvoice.id));
+    if (linkedInvoice.collection_id) {
+      statements.push(env.DB.prepare(
+        `UPDATE collections SET customer_id=?,client_name=?,amount=?,updated_at=? WHERE id=?`
+      ).bind(data.customer_id, data.customer_name, total, nowIso(), linkedInvoice.collection_id));
+    }
+    syncedInvoice = { ...linkedInvoice, customer_id: data.customer_id, customer_name: data.customer_name, subtotal, total, items: syncedItems };
+  }
+
+  await env.DB.batch(statements);
   await insertAudit(env, request, user, "UPDATE", "delivery_notes", id, before, data);
-  return json({ ok: true });
+  if (linkedInvoice) {
+    await insertAudit(env, request, user, "AUTO_SYNC", "invoices", linkedInvoice.id, linkedInvoice, syncedInvoice);
+  }
+  return json({ ok: true, invoice_id: linkedInvoice?.id || null, requires_invoice_review: requiresInvoiceReview, invoice_total: syncedInvoice?.total ?? null });
 }
 
 async function deleteDeliveryNote(env, user, id) {
@@ -1099,7 +1160,8 @@ async function deleteDeliveryNote(env, user, id) {
 
 async function listInvoices(env) {
   const result = await env.DB.prepare(
-    `SELECT invoices.*, users.display_name AS created_by_name, COUNT(invoice_items.id) AS item_count
+    `SELECT invoices.*, users.display_name AS created_by_name, COUNT(invoice_items.id) AS item_count,
+            MAX(CASE WHEN invoice_items.price_type='pending' THEN 1 ELSE 0 END) AS requires_review
      FROM invoices
      LEFT JOIN invoice_items ON invoice_items.invoice_id = invoices.id
      LEFT JOIN users ON users.id = invoices.created_by
@@ -1124,6 +1186,7 @@ async function listInvoices(env) {
 async function invoiceXlsxResponse(env, id) {
   const invoice = await invoiceWithItems(env, id);
   if (!invoice) throw new HttpError("Record not found", 404);
+  if (invoice.items.some((item) => item.price_type === "pending")) throw new HttpError("يجب استكمال مراجعة وتسعير الفاتورة أولا", 409);
   const rows = [];
   const addRow = (values, style = "normal", mergeAcross = 0) => rows.push({ values, style, mergeAcross });
   addRow([invoice.transaction_type === "gift" ? "فاتورة هدية / بضاعة مجانية" : "فاتورة"], "title", 8);

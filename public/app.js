@@ -565,7 +565,9 @@ function saveVisibleDeliveryItem() {
   const form = qs("#deliveryNoteForm");
   if (!form) return;
   const isCovers = form.product_type.value === "غطيان";
+  const current = deliveryCurrentItem();
   state.deliveryDraft.items[state.deliveryDraft.index] = {
+    source_item_id: current.source_item_id || null,
     product_type: form.product_type.value,
     design_id: isCovers ? "" : form.design_id.value,
     size_id: form.size_id.value,
@@ -1132,12 +1134,11 @@ function renderInvoices() {
       <td data-label="إذن التسليم">#${item.delivery_note_id}</td>
       <td data-label="العميل">${item.customer_name || "-"}</td>
       <td data-label="الأصناف">${money(item.item_count)}</td>
-      <td data-label="الإجمالي">${money(item.total)} ${item.transaction_type === "gift" ? `<span class="gift-badge">مجانية</span>` : ""}</td>
+      <td data-label="الإجمالي">${money(item.total)} ${item.transaction_type === "gift" ? `<span class="gift-badge">مجانية</span>` : ""} ${item.requires_review ? `<span class="review-badge">يحتاج مراجعة</span>` : ""}</td>
       <td data-label="المستخدم">${item.created_by_name || "-"}</td>
       <td class="actions">
         ${isAdmin() && !isArchivedDate(item.invoice_date) ? `<button type="button" data-edit-invoice="${item.id}" title="تعديل">✎</button>` : ""}
-        <button type="button" data-xlsx-invoice="${item.id}" title="Excel">Excel</button>
-        <button type="button" data-pdf-invoice="${item.id}" title="PDF">PDF</button>
+        ${item.requires_review ? "" : `<button type="button" data-xlsx-invoice="${item.id}" title="Excel">Excel</button><button type="button" data-pdf-invoice="${item.id}" title="PDF">PDF</button>`}
         ${isAdmin() && !isArchivedDate(item.invoice_date) ? `<button class="danger" type="button" data-delete-invoice="${item.id}" title="حذف">×</button>` : isAdmin() ? `<span class="muted">للعرض فقط</span>` : ""}
       </td>
     </tr>
@@ -1834,8 +1835,19 @@ async function saveDeliveryNote(event) {
   };
   const id = form.elements.id.value;
   if (id) {
-    await api(`/api/delivery-notes/${id}`, { method: "PUT", body: JSON.stringify(payload) });
-    showToast("تم تعديل إذن التسليم");
+    const result = await api(`/api/delivery-notes/${id}`, { method: "PUT", body: JSON.stringify(payload) });
+    resetDeliveryNoteForm();
+    await Promise.all([loadDeliveryNotes(), loadInvoices(), loadCustomers(), loadAudit()]);
+    if (result.invoice_id && result.requires_invoice_review) {
+      setActiveTab("invoices");
+      editInvoice(result.invoice_id);
+      showToast(`تم تحديث الإذن والفاتورة #${result.invoice_id}. استكمل تسعير الأصناف الجديدة أو المتغيرة.`);
+    } else if (result.invoice_id) {
+      showToast(`تم تعديل الإذن وتحديث الفاتورة #${result.invoice_id} تلقائيًا`);
+    } else {
+      showToast("تم تعديل إذن التسليم");
+    }
+    return;
   } else {
     await api("/api/delivery-notes", { method: "POST", body: JSON.stringify(payload) });
     showToast("تم حفظ إذن التسليم");
@@ -2067,6 +2079,7 @@ function editDeliveryNote(id) {
   state.deliveryDraft = {
     index: 0,
     items: (item.items || []).map((row) => ({
+      source_item_id: row.id,
       product_type: row.product_type || "كوبايات - علب",
       design_id: row.design_id || "",
       size_id: row.size_id || "",
