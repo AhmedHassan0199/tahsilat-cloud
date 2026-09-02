@@ -973,12 +973,12 @@ async function deliveryNoteXlsxResponse(env, id) {
   const rows = [];
   const addRow = (values, style = "normal", mergeAcross = 0) => rows.push({ values, style, mergeAcross });
   addRow(["الشركة المصرية للأكواب والعبوات الورقية", "", "", "", "", ""], "brand", 3);
-  addRow([note.transaction_type === "gift" ? "إذن تسليم - هدية / بضاعة مجانية" : "إذن تسليم"], "title", 6);
+  addRow([note.transaction_type === "gift" ? "إذن تسليم - هدية / بضاعة مجانية" : "إذن تسليم"], "title", 5);
   addRow(["رقم الإذن", note.id, "التاريخ", note.delivery_date || "", "العميل", note.customer_name || ""], "meta");
   addRow(["المسؤول", note.responsible || "", "ملاحظة عامة", note.note || "", "", ""], "meta");
   addRow(["", "", "", "", "", ""], "normal");
-  addRow(["#", "أمر التوريد", "الصنف", "التصميم", "المقاس", "العدد", "ملاحظة"], "header");
-  note.items.forEach((item) => addRow([item.line_no, item.supply_order_id ? `#${item.supply_order_id}` : "-", item.product_type, item.design_name || "", item.size_name || "", `${item.quantity_amount || 0} ${item.quantity_unit || ""}`, item.note || ""]));
+  addRow(["#", "الصنف", "التصميم", "المقاس", "العدد", "ملاحظة"], "header");
+  note.items.forEach((item) => addRow([item.line_no, item.product_type, item.design_name || "", item.size_name || "", `${item.quantity_amount || 0} ${item.quantity_unit || ""}`, item.note || ""]));
   const prepared = normalizeSheetRows(rows);
   const file = reportXlsx(`إذن تسليم ${id}`, prepared.rows, prepared.merges, {
     brandLogo: await xlsxBrandLogo(env),
@@ -997,6 +997,7 @@ function deliveryNoteData(payload) {
   return {
     delivery_date: parseDateValue(payload.delivery_date) || new Date().toISOString().slice(0, 10),
     customer_id: Number(payload.customer_id || 0) || null,
+    responsible: selectedResponsible(payload.responsible),
     note: String(payload.note || "").trim() || null,
     items: Array.isArray(payload.items) ? payload.items : [],
   };
@@ -1005,7 +1006,6 @@ function deliveryNoteData(payload) {
 function deliveryItemData(payload, index) {
   return {
     source_item_id: Number(payload.source_item_id || 0) || null,
-    supply_order_id: Number(payload.supply_order_id || 0) || null,
     line_no: index + 1,
     product_type: ["كوبايات - علب", "غطيان"].includes(payload.product_type) ? payload.product_type : "",
     design_id: Number(payload.design_id || 0) || null,
@@ -1032,7 +1032,7 @@ async function createDeliveryNote(request, env, user) {
   return json({ id: deliveryNoteId, item_count: data.items.length });
 }
 
-async function prepareDeliveryNote(env, payload, options = {}) {
+async function prepareDeliveryNote(env, payload) {
   const data = deliveryNoteData(payload);
   if (!data.customer_id) throw new HttpError("العميل مطلوب", 400);
   if (!data.items.length) throw new HttpError("يجب إضافة صنف واحد على الأقل في إذن التسليم", 400);
@@ -1040,10 +1040,8 @@ async function prepareDeliveryNote(env, payload, options = {}) {
   if (!customer) throw new HttpError("العميل غير صحيح", 400);
 
   const items = [];
-  const responsibles = new Set();
   for (let index = 0; index < data.items.length; index += 1) {
     const item = deliveryItemData(data.items[index], index);
-    if (!item.supply_order_id && !options.allowUnlinked) throw new HttpError(`أمر التوريد مطلوب في السطر ${item.line_no}`, 400);
     if (!item.product_type) throw new HttpError(`نوع الصنف مطلوب في السطر ${item.line_no}`, 400);
     if (item.product_type !== "غطيان" && !item.design_id) throw new HttpError(`التصميم مطلوب في السطر ${item.line_no}`, 400);
     if (!item.size_id) throw new HttpError(`المقاس مطلوب في السطر ${item.line_no}`, 400);
@@ -1054,22 +1052,10 @@ async function prepareDeliveryNote(env, payload, options = {}) {
     if (item.product_type !== "غطيان" && !design) throw new HttpError(`التصميم غير صحيح في السطر ${item.line_no}`, 400);
     const size = await env.DB.prepare("SELECT id, name FROM product_sizes WHERE id = ? AND active = 1").bind(item.size_id).first();
     if (!size) throw new HttpError(`المقاس غير صحيح في السطر ${item.line_no}`, 400);
-    if (!item.supply_order_id && options.allowUnlinked) {
-      items.push({ ...item, design_id: design.id, design_name: design.name, size_name: size.name });
-      continue;
-    }
-    const order = await env.DB.prepare("SELECT * FROM supply_orders WHERE id = ?").bind(item.supply_order_id).first();
-    if (!order) throw new HttpError(`أمر التوريد غير صحيح في السطر ${item.line_no}`, 400);
-    if (!RESPONSIBLES.includes(String(order.responsible || "").trim())) throw new HttpError(`حدد المسؤول في أمر التوريد #${order.id} أولا`, 400);
-    if (Number(order.customer_id) !== Number(customer.id) || (item.product_type !== "غطيان" && Number(order.design_id) !== Number(design.id)) || Number(order.size_id) !== Number(size.id)) throw new HttpError(`أمر التوريد لا يطابق العميل والتصميم والمقاس في السطر ${item.line_no}`, 400);
-    responsibles.add(order.responsible);
     items.push({ ...item, design_id: design.id, design_name: design.name, size_name: size.name });
   }
-  if (!options.allowUnlinked && responsibles.size !== 1) throw new HttpError("يجب أن تكون جميع أوامر التوريد في الإذن لنفس المسؤول", 400);
-  const responsible = options.allowUnlinked ? selectedResponsible(options.responsible) : [...responsibles][0];
   return {
     ...data,
-    responsible,
     customer_id: customer.id,
     customer_name: customer.name,
     items,
@@ -1092,7 +1078,7 @@ async function insertDeliveryNoteItems(env, deliveryNoteId, items) {
       item.quantity_unit,
       item.quantity_amount,
       item.note,
-      item.supply_order_id
+      null
     ).run();
   }
 }
@@ -1109,7 +1095,7 @@ async function updateDeliveryNote(request, env, user, id) {
   const before = await deliveryNoteWithItems(env, id);
   if (!before) throw new HttpError("Record not found", 404);
   assertRecordNotArchived(before, "delivery_date");
-  const data = await prepareDeliveryNote(env, await readJson(request), { allowUnlinked: before.transaction_type !== "standard", responsible: before.responsible });
+  const data = await prepareDeliveryNote(env, await readJson(request));
   assertAccountingDate(data.delivery_date, "تاريخ إذن التسليم");
   const linkedInvoiceRow = await env.DB.prepare("SELECT id FROM invoices WHERE delivery_note_id = ?").bind(id).first();
   const linkedInvoice = linkedInvoiceRow ? await invoiceWithItems(env, linkedInvoiceRow.id) : null;
@@ -1127,24 +1113,25 @@ async function updateDeliveryNote(request, env, user, id) {
     statements.push(env.DB.prepare(
       `INSERT INTO delivery_note_items(delivery_note_id,line_no,product_type,design_id,design_name,size_id,size_name,quantity_unit,quantity_amount,note,supply_order_id)
        VALUES(?,?,?,?,?,?,?,?,?,?,?)`
-    ).bind(id, item.line_no, item.product_type, item.design_id, item.design_name, item.size_id, item.size_name, item.quantity_unit, item.quantity_amount, item.note, item.supply_order_id));
+    ).bind(id, item.line_no, item.product_type, item.design_id, item.design_name, item.size_id, item.size_name, item.quantity_unit, item.quantity_amount, item.note, null));
   }
 
   let requiresInvoiceReview = false;
   let syncedInvoice = null;
   if (linkedInvoice) {
     const gift = linkedInvoice.transaction_type === "gift";
+    const oldNoteItems = new Map(before.items.map((item) => [String(item.id), item]));
+    const oldInvoiceItems = new Map(linkedInvoice.items.map((item) => [String(item.delivery_note_item_id), item]));
     const supplyOrders = new Map();
     if (!gift) {
       for (const item of data.items) {
-        const supplyOrderId = Number(item.supply_order_id || 0);
+        const oldInvoiceItem = item.source_item_id ? oldInvoiceItems.get(String(item.source_item_id)) : null;
+        const supplyOrderId = Number(oldInvoiceItem?.supply_order_id || 0);
         if (!supplyOrderId || supplyOrders.has(String(supplyOrderId))) continue;
         const order = await env.DB.prepare("SELECT * FROM supply_orders WHERE id = ?").bind(supplyOrderId).first();
         if (order) supplyOrders.set(String(supplyOrderId), order);
       }
     }
-    const oldNoteItems = new Map(before.items.map((item) => [String(item.id), item]));
-    const oldInvoiceItems = new Map(linkedInvoice.items.map((item) => [String(item.delivery_note_item_id), item]));
     const customerChanged = Number(before.customer_id) !== Number(data.customer_id);
     const serialOrders = new Set();
     const syncedItems = data.items.map((item) => {
@@ -1153,12 +1140,12 @@ async function updateDeliveryNote(request, env, user, id) {
       const identityChanged = customerChanged || !oldNoteItem || !oldInvoiceItem
         || oldNoteItem.product_type !== item.product_type
         || Number(oldNoteItem.design_id || 0) !== Number(item.design_id || 0)
-        || Number(oldNoteItem.size_id || 0) !== Number(item.size_id || 0)
-        || Number(oldNoteItem.supply_order_id || 0) !== Number(item.supply_order_id || 0);
+        || Number(oldNoteItem.size_id || 0) !== Number(item.size_id || 0);
       if (identityChanged) requiresInvoiceReview = linkedInvoice.transaction_type !== "gift";
       const preservePrice = !identityChanged && oldInvoiceItem;
       const unitPrice = gift ? 0 : preservePrice ? Number(oldInvoiceItem.unit_price || 0) : 0;
-      const orderKey = String(item.supply_order_id || "");
+      const retainedSupplyOrderId = gift ? null : preservePrice ? Number(oldInvoiceItem.supply_order_id || 0) || null : null;
+      const orderKey = String(retainedSupplyOrderId || "");
       const order = supplyOrders.get(orderKey);
       const serial = gift || !order || serialOrders.has(orderKey)
         ? { price: 0, colors: 0, total: 0 }
@@ -1166,7 +1153,7 @@ async function updateDeliveryNote(request, env, user, id) {
       if (order) serialOrders.add(orderKey);
       return {
         ...item,
-        supply_order_id: gift ? null : item.supply_order_id,
+        supply_order_id: retainedSupplyOrderId,
         price_type: gift ? "gift" : preservePrice ? oldInvoiceItem.price_type : "pending",
         unit_price: unitPrice,
         line_total: Number(item.quantity_amount || 0) * unitPrice,
@@ -1320,18 +1307,19 @@ async function prepareInvoice(env, payload, invoiceId = null) {
   for (const noteItem of deliveryNote.items) {
     const payloadItem = payloadItems.get(String(noteItem.id));
     if (!payloadItem) throw new HttpError(`بيانات الفاتورة ناقصة للسطر ${noteItem.line_no}`, 400);
-    const supplyOrderId = Number(noteItem.supply_order_id || 0) || null;
+    let supplyOrderId = Number(payloadItem.supply_order_id || 0) || null;
     let priceType = String(payloadItem.price_type || "").trim();
     let unitPrice = Number(payloadItem.unit_price || 0);
-    if (!supplyOrderId) throw new HttpError(`يجب ربط السطر ${noteItem.line_no} بأمر توريد من إذن التسليم`, 400);
-    const order = await env.DB.prepare("SELECT * FROM supply_orders WHERE id = ?").bind(supplyOrderId).first();
-    if (!order) throw new HttpError(`أمر التوريد غير صحيح في السطر ${noteItem.line_no}`, 400);
-    if (Number(order.customer_id) !== Number(deliveryNote.customer_id)) throw new HttpError(`أمر التوريد لا يخص نفس العميل في السطر ${noteItem.line_no}`, 400);
-
+    let order = null;
     if (noteItem.product_type === "غطيان") {
+      supplyOrderId = null;
       priceType = "manual";
       if (!Number.isFinite(unitPrice) || unitPrice < 0) throw new HttpError(`سعر الغطيان غير صحيح في السطر ${noteItem.line_no}`, 400);
     } else {
+      if (!supplyOrderId) throw new HttpError(`أمر التوريد مطلوب في السطر ${noteItem.line_no}`, 400);
+      order = await env.DB.prepare("SELECT * FROM supply_orders WHERE id = ?").bind(supplyOrderId).first();
+      if (!order) throw new HttpError(`أمر التوريد غير صحيح في السطر ${noteItem.line_no}`, 400);
+      if (Number(order.customer_id) !== Number(deliveryNote.customer_id)) throw new HttpError(`أمر التوريد لا يخص نفس العميل في السطر ${noteItem.line_no}`, 400);
       if (Number(order.design_id) !== Number(noteItem.design_id) || Number(order.size_id) !== Number(noteItem.size_id)) {
         throw new HttpError(`أمر التوريد لا يطابق التصميم والمقاس في السطر ${noteItem.line_no}`, 400);
       }
@@ -1343,8 +1331,8 @@ async function prepareInvoice(env, payload, invoiceId = null) {
 
     const quantity = Number(noteItem.quantity_amount || 0);
     const lineTotal = quantity * unitPrice;
-    const serial = serialOrders.has(String(order.id)) ? { price: 0, colors: 0, total: 0 } : invoiceSerial(order);
-    serialOrders.add(String(order.id));
+    const serial = !order || serialOrders.has(String(order.id)) ? { price: 0, colors: 0, total: 0 } : invoiceSerial(order);
+    if (order) serialOrders.add(String(order.id));
     items.push({
       delivery_note_item_id: noteItem.id,
       line_no: noteItem.line_no,

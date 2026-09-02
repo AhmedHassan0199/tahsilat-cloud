@@ -532,7 +532,6 @@ function fillSupplyOrderFormLookups() {
 
 function blankDeliveryItem() {
   return {
-    supply_order_id: "",
     product_type: "كوبايات - علب",
     design_id: "",
     size_id: "",
@@ -546,7 +545,7 @@ function fillDeliveryNoteFormLookups() {
   const form = qs("#deliveryNoteForm");
   if (!form) return;
   fillCustomerSelect(form.customer_id, form.customer_id.value);
-  fillDeliverySupplyOrderSelect(form.supply_order_id, form.supply_order_id.value);
+  fillRequiredResponsible(form.responsible, form.responsible.value);
   fillExistingLookupSelect(form.design_id, state.designs, "اختر التصميم", form.design_id.value);
   fillExistingLookupSelect(form.size_id, state.productSizes, "اختر المقاس", form.size_id.value);
 }
@@ -556,38 +555,6 @@ function fillRequiredResponsible(select, current = "") {
   fillSelect(select, ["", ...state.responsibles], current);
   select.options[0].textContent = "اختر المسؤول";
   select.required = true;
-}
-
-function fillDeliverySupplyOrderSelect(select, current = "") {
-  if (!select) return;
-  const form = qs("#deliveryNoteForm");
-  const customerId = form?.customer_id.value || "";
-  const orders = state.supplyOrders.filter((order) => !customerId || String(order.customer_id) === String(customerId));
-  select.innerHTML = `<option value="">اختر أمر التوريد</option>`;
-  orders.forEach((order) => {
-    const validResponsible = state.responsibles.includes(order.responsible);
-    const option = document.createElement("option");
-    option.value = order.id;
-    option.textContent = `#${order.id} - ${order.design_name || "-"} - ${order.size_name || "-"} - ${validResponsible ? order.responsible : "المسؤول غير محدد"}`;
-    option.disabled = !validResponsible;
-    select.appendChild(option);
-  });
-  select.value = current;
-  refreshSearchableSelect(select);
-}
-
-function applyDeliverySupplyOrder() {
-  const form = qs("#deliveryNoteForm");
-  if (!form) return;
-  const order = state.supplyOrders.find((item) => String(item.id) === String(form.supply_order_id.value));
-  if (order) {
-    form.product_type.value = "كوبايات - علب";
-    fillExistingLookupSelect(form.design_id, state.designs, "اختر التصميم", order.design_id || "");
-    fillExistingLookupSelect(form.size_id, state.productSizes, "اختر المقاس", order.size_id || "");
-  }
-  const selectedResponsibles = new Set(state.deliveryDraft.items.map((item) => state.supplyOrders.find((orderItem) => String(orderItem.id) === String(item.supply_order_id))?.responsible).filter(Boolean));
-  if (order?.responsible) selectedResponsibles.add(order.responsible);
-  form.responsible_display.value = selectedResponsibles.size === 1 ? [...selectedResponsibles][0] : selectedResponsibles.size > 1 ? "أوامر بمسؤولين مختلفين" : "";
 }
 
 function toggleDeliveryProductType() {
@@ -610,7 +577,6 @@ function saveVisibleDeliveryItem() {
   const current = deliveryCurrentItem();
   state.deliveryDraft.items[state.deliveryDraft.index] = {
     source_item_id: current.source_item_id || null,
-    supply_order_id: form.supply_order_id.value,
     product_type: form.product_type.value,
     design_id: isCovers ? "" : form.design_id.value,
     size_id: form.size_id.value,
@@ -625,7 +591,6 @@ function showDeliveryItem(index) {
   if (!form) return;
   state.deliveryDraft.index = Math.max(0, Math.min(index, state.deliveryDraft.items.length - 1));
   const item = deliveryCurrentItem();
-  fillDeliverySupplyOrderSelect(form.supply_order_id, item.supply_order_id || "");
   form.product_type.value = item.product_type || "كوبايات - علب";
   fillExistingLookupSelect(form.design_id, state.designs, "اختر التصميم", item.design_id || "");
   fillExistingLookupSelect(form.size_id, state.productSizes, "اختر المقاس", item.size_id || "");
@@ -633,7 +598,6 @@ function showDeliveryItem(index) {
   form.quantity_amount.value = item.quantity_amount || "";
   form.item_note.value = item.note || "";
   toggleDeliveryProductType();
-  applyDeliverySupplyOrder();
   qs("#deliveryItemCounter").textContent = `الصنف ${state.deliveryDraft.index + 1} من ${state.deliveryDraft.items.length}`;
   qs("#prevDeliveryItemBtn").disabled = state.deliveryDraft.index === 0;
   renderDeliveryDraftRows();
@@ -645,12 +609,9 @@ function renderDeliveryDraftRows() {
   body.innerHTML = state.deliveryDraft.items.map((item, index) => {
     const design = state.designs.find((row) => String(row.id) === String(item.design_id));
     const size = state.productSizes.find((row) => String(row.id) === String(item.size_id));
-    const order = state.supplyOrders.find((row) => String(row.id) === String(item.supply_order_id));
     return `
       <tr class="${index === state.deliveryDraft.index ? "selected-row" : ""}">
         <td data-label="#">${index + 1}</td>
-        <td data-label="أمر التوريد">${order ? `#${order.id}` : "-"}</td>
-        <td data-label="المسؤول">${order?.responsible || "-"}</td>
         <td data-label="الصنف">${item.product_type || "-"}</td>
         <td data-label="التصميم">${design?.name || "-"}</td>
         <td data-label="المقاس">${size?.name || "-"}</td>
@@ -732,7 +693,7 @@ function buildInvoiceDraft(note) {
     delivery_note_id: note.id,
     items: (note.items || []).map((item) => ({
       delivery_note_item_id: item.id,
-      supply_order_id: item.supply_order_id || "",
+      supply_order_id: "",
       price_type: item.product_type === "غطيان" ? "manual" : "without_cover",
       unit_price: 0,
     })),
@@ -810,6 +771,7 @@ function renderInvoiceEditor() {
   }
   host.innerHTML = (note.items || []).map((noteItem, index) => {
     const draftItem = state.invoiceDraft.items[index];
+    const orders = noteItem.product_type === "غطيان" ? [] : matchingSupplyOrders(note, noteItem);
     const selectedOrder = state.supplyOrders.find((order) => String(order.id) === String(draftItem.supply_order_id));
     if (selectedOrder && draftItem.price_type === "with_cover") draftItem.unit_price = Number(selectedOrder.price_with_cover || 0);
     if (selectedOrder && draftItem.price_type === "without_cover") draftItem.unit_price = Number(selectedOrder.price_without_cover || 0);
@@ -825,7 +787,10 @@ function renderInvoiceEditor() {
           <input type="hidden" name="price_type" value="manual">
           <label>سعر الغطيان<input name="unit_price" type="number" min="0" step="0.01" value="${draftItem.unit_price || 0}"></label>
         ` : `
-          <p><strong>أمر التوريد:</strong> ${selectedOrder ? `#${selectedOrder.id}` : "غير محدد"}</p>
+          <label>أمر التوريد<select name="supply_order_id" required>
+            <option value="">اختر أمر التوريد</option>
+            ${orders.map((order) => `<option value="${order.id}" ${String(order.id) === String(draftItem.supply_order_id) ? "selected" : ""}>#${order.id} - ${order.order_date || ""} - بدون ${money(order.price_without_cover)} / بغطاء ${money(order.price_with_cover)}</option>`).join("")}
+          </select></label>
           <label>نوع السعر<select name="price_type">
             <option value="without_cover" ${draftItem.price_type === "without_cover" ? "selected" : ""}>بدون غطاء - ${selectedOrder ? money(selectedOrder.price_without_cover) : "0"}</option>
             <option value="with_cover" ${draftItem.price_type === "with_cover" ? "selected" : ""}>بغطاء - ${selectedOrder ? money(selectedOrder.price_with_cover) : "0"}</option>
@@ -1393,7 +1358,7 @@ function printDeliveryNote(id) {
   if (!note) return;
   printDocument(`إذن تسليم #${note.id}`, [
     { type: "meta", rows: [["التاريخ", note.delivery_date || "-"], ["العميل", note.customer_name || "-"], ["المسؤول", note.responsible || note.created_by_name || "-"], ["ملاحظة عامة", note.note || "-"]] },
-    { type: "table", title: "الأصناف", headers: ["#", "أمر التوريد", "الصنف", "التصميم", "المقاس", "العدد", "ملاحظة"], rows: (note.items || []).map((item) => [item.line_no, item.supply_order_id ? `#${item.supply_order_id}` : "-", item.product_type, item.design_name || "-", item.size_name || "-", `${money(item.quantity_amount)} ${item.quantity_unit || ""}`, item.note || "-"]) },
+    { type: "table", title: "الأصناف", headers: ["#", "الصنف", "التصميم", "المقاس", "العدد", "ملاحظة"], rows: (note.items || []).map((item) => [item.line_no, item.product_type, item.design_name || "-", item.size_name || "-", `${money(item.quantity_amount)} ${item.quantity_unit || ""}`, item.note || "-"]) },
   ], { branded: true });
 }
 
@@ -1913,6 +1878,7 @@ async function saveDeliveryNote(event) {
   const payload = {
     delivery_date: form.delivery_date.value,
     customer_id: form.customer_id.value,
+    responsible: form.responsible.value,
     note: form.note.value.trim(),
     items,
   };
@@ -2161,12 +2127,12 @@ function editDeliveryNote(id) {
   form.elements.id.value = item.id;
   form.delivery_date.value = item.delivery_date || "";
   fillCustomerSelect(form.customer_id, item.customer_id || "");
+  fillRequiredResponsible(form.responsible, item.responsible || "");
   form.note.value = item.note || "";
   state.deliveryDraft = {
     index: 0,
     items: (item.items || []).map((row) => ({
       source_item_id: row.id,
-      supply_order_id: row.supply_order_id || "",
       product_type: row.product_type || "كوبايات - علب",
       design_id: row.design_id || "",
       size_id: row.size_id || "",
@@ -2444,8 +2410,6 @@ function bindEvents() {
   });
   qsa('#deliveryNoteForm input, #deliveryNoteForm select, #deliveryNoteForm textarea').forEach((field) => {
     field.addEventListener("change", () => {
-      if (field.name === "customer_id") fillDeliverySupplyOrderSelect(qs('#deliveryNoteForm select[name="supply_order_id"]'));
-      if (field.name === "supply_order_id") applyDeliverySupplyOrder();
       toggleDeliveryProductType();
       saveVisibleDeliveryItem();
       renderDeliveryDraftRows();
