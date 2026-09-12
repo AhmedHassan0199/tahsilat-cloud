@@ -76,6 +76,9 @@ async function handleApi(request, env, url) {
   if (/^\/api\/delivery-notes\/\d+\/cover-deliveries$/.test(url.pathname) && method === "POST") {
     return addCoverDelivery(request, env, user, Number(url.pathname.split("/")[3]));
   }
+  if (/^\/api\/delivery-notes\/\d+\/cover-requirements$/.test(url.pathname) && method === "PUT") {
+    return updateCoverRequirements(request, env, user, Number(url.pathname.split("/")[3]));
+  }
   if (url.pathname.startsWith("/api/delivery-notes/")) {
     const id = idFromPath(url.pathname);
     if (method === "PUT") return updateDeliveryNote(request, env, user, id);
@@ -1156,6 +1159,44 @@ async function addCoverDelivery(request, env, user, deliveryNoteId) {
   await env.DB.prepare("UPDATE delivery_notes SET fulfillment_status=?,updated_at=? WHERE id=?").bind(status, now, deliveryNoteId).run();
   await insertAudit(env, request, user, "ADD_COVER_DELIVERY", "delivery_notes", deliveryNoteId, null, { delivery_note_item_id: itemId, delivery_date: deliveryDate, quantity_amount: quantity, remaining: remaining - quantity, fulfillment_status: status });
   return json({ ok: true, remaining: remaining - quantity, fulfillment_status: status });
+}
+
+async function updateCoverRequirements(request, env, user, deliveryNoteId) {
+  assertCanWrite(user);
+  const note = await deliveryNoteWithItems(env, deliveryNoteId);
+  if (!note) throw new HttpError("Record not found", 404);
+  assertRecordNotArchived(note, "delivery_date");
+  const trackedItems = note.items.filter((item) => item.product_type === "غطيان" && item.required_quantity_amount != null);
+  if (!trackedItems.length) throw new HttpError("هذا الإذن لا يحتوي على غطيان قابلة للمتابعة", 400);
+
+  const payload = await readJson(request);
+  const requestedItems = Array.isArray(payload.items) ? payload.items : [];
+  const requestedById = new Map();
+  for (const requested of requestedItems) {
+    const itemId = Number(requested.delivery_note_item_id || 0);
+    const requiredQuantity = Number(requested.required_quantity_amount);
+    if (!itemId || requestedById.has(itemId)) throw new HttpError("بيانات بنود الغطيان غير صحيحة", 400);
+    requestedById.set(itemId, requiredQuantity);
+  }
+  if (requestedById.size !== trackedItems.length) throw new HttpError("يجب إرسال إجمالي المستحق لكل بنود الغطيان", 400);
+
+  const statements = [];
+  const changes = [];
+  for (const item of trackedItems) {
+    if (!requestedById.has(Number(item.id))) throw new HttpError("أحد بنود الغطيان غير موجود", 400);
+    const requiredQuantity = requestedById.get(Number(item.id));
+    const deliveredQuantity = Number(item.quantity_amount || 0);
+    if (!Number.isFinite(requiredQuantity) || requiredQuantity <= 0) throw new HttpError(`إجمالي المستحق غير صحيح في البند ${item.line_no}`, 400);
+    if (requiredQuantity < deliveredQuantity) throw new HttpError(`لا يمكن جعل المستحق أقل من المسلم (${deliveredQuantity}) في البند ${item.line_no}`, 400);
+    statements.push(env.DB.prepare("UPDATE delivery_note_items SET required_quantity_amount=? WHERE id=? AND delivery_note_id=?").bind(requiredQuantity, item.id, deliveryNoteId));
+    changes.push({ delivery_note_item_id: item.id, before: Number(item.required_quantity_amount), after: requiredQuantity, delivered: deliveredQuantity });
+  }
+  const status = trackedItems.some((item) => Number(item.quantity_amount || 0) < requestedById.get(Number(item.id))) ? "incomplete" : "completed";
+  const now = nowIso();
+  statements.push(env.DB.prepare("UPDATE delivery_notes SET fulfillment_status=?,updated_at=? WHERE id=?").bind(status, now, deliveryNoteId));
+  await env.DB.batch(statements);
+  await insertAudit(env, request, user, "UPDATE_COVER_REQUIREMENTS", "delivery_notes", deliveryNoteId, { fulfillment_status: note.fulfillment_status, items: trackedItems }, { fulfillment_status: status, changes });
+  return json({ ok: true, fulfillment_status: status });
 }
 
 async function deliveryNoteWithItems(env, id) {

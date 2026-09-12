@@ -1167,6 +1167,7 @@ function renderDeliveryNotes() {
       <td data-label="المستخدم">${item.created_by_name || "-"}</td>
       <td class="actions">
         ${item.fulfillment_status === "incomplete" && (isAdmin() || isCollector()) ? `<button type="button" data-add-cover-delivery="${item.id}">استكمال الغطيان</button>` : ""}
+        ${isAdmin() && !isArchivedDate(item.delivery_date) && (item.items || []).some((row) => row.required_quantity_amount != null) ? `<button type="button" data-edit-cover-requirements="${item.id}">تعديل المستحق</button>` : ""}
         ${isAdmin() && !isArchivedDate(item.delivery_date) && !(item.items || []).some((row) => row.required_quantity_amount != null) ? `<button type="button" data-edit-delivery-note="${item.id}" title="تعديل">✎</button>` : ""}
         <button type="button" data-xlsx-delivery-note="${item.id}" title="Excel">Excel</button>
         <button type="button" data-pdf-delivery-note="${item.id}" title="PDF">PDF</button>
@@ -1965,6 +1966,36 @@ async function saveCoverDelivery(event) {
   await Promise.all([loadDeliveryNotes(), isAdmin() ? loadAudit() : Promise.resolve()]);
 }
 
+function openCoverRequirements(noteId) {
+  const note = state.deliveryNotes.find((row) => String(row.id) === String(noteId));
+  if (!note) return;
+  const trackedItems = (note.items || []).filter((item) => item.product_type === "غطيان" && item.required_quantity_amount != null);
+  if (!trackedItems.length) return showToast("لا توجد غطيان قابلة لتعديل المستحق", true);
+  const form = qs("#coverRequirementsForm");
+  form.delivery_note_id.value = note.id;
+  qs("#coverRequirementsItems").innerHTML = trackedItems.map((item) => `
+    <label data-cover-requirement-item="${item.id}">
+      ${escapeHtml(item.size_name || "غطاء")} — المسلم ${money(item.quantity_amount)} ${escapeHtml(item.quantity_unit || "")}
+      <input name="required_quantity_amount" type="number" min="${Number(item.quantity_amount || 0)}" step="0.01" value="${Number(item.required_quantity_amount)}" required>
+    </label>
+  `).join("");
+  qs("#coverRequirementsModal").classList.remove("hidden");
+}
+
+async function saveCoverRequirements(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const noteId = form.delivery_note_id.value;
+  const items = qsa("[data-cover-requirement-item]", form).map((row) => ({
+    delivery_note_item_id: Number(row.dataset.coverRequirementItem),
+    required_quantity_amount: Number(qs('[name="required_quantity_amount"]', row).value),
+  }));
+  const result = await api(`/api/delivery-notes/${noteId}/cover-requirements`, { method: "PUT", body: JSON.stringify({ items }) });
+  qs("#coverRequirementsModal").classList.add("hidden");
+  showToast(result.fulfillment_status === "completed" ? "تم تحديث المستحق والإذن مكتمل" : "تم تحديث المستحق والإذن غير مكتمل");
+  await Promise.all([loadDeliveryNotes(), loadAudit()]);
+}
+
 function invoicePayload() {
   const form = qs("#invoiceForm");
   const note = selectedDeliveryNote();
@@ -2384,6 +2415,7 @@ function bindEvents() {
   bindFormAction("#supplyOrderForm", saveSupplyOrder);
   bindFormAction("#deliveryNoteForm", saveDeliveryNote);
   bindFormAction("#coverDeliveryForm", saveCoverDelivery);
+  bindFormAction("#coverRequirementsForm", saveCoverRequirements);
   bindFormAction("#expenseForm", saveExpense);
   bindFormAction("#transferForm", saveTransfer);
   bindFormAction("#userForm", saveUser);
@@ -2393,6 +2425,7 @@ function bindEvents() {
   qs("#cancelSupplyOrderEdit").addEventListener("click", resetSupplyOrderForm);
   qs("#cancelDeliveryNoteEdit").addEventListener("click", resetDeliveryNoteForm);
   qs("#cancelCoverDeliveryBtn").addEventListener("click", () => qs("#coverDeliveryModal").classList.add("hidden"));
+  qs("#cancelCoverRequirementsBtn").addEventListener("click", () => qs("#coverRequirementsModal").classList.add("hidden"));
   qs('#coverDeliveryForm select[name="delivery_note_item_id"]').addEventListener("change", updateCoverDeliverySummary);
   qsa("[data-delivery-status]").forEach((button) => button.addEventListener("click", () => {
     state.deliveryStatusFilter = button.dataset.deliveryStatus;
@@ -2517,6 +2550,7 @@ function bindEvents() {
     const deliveryNoteEdit = event.target.closest("[data-edit-delivery-note]");
     const deliveryNoteDelete = event.target.closest("[data-delete-delivery-note]");
     const addCoverDelivery = event.target.closest("[data-add-cover-delivery]");
+    const editCoverRequirements = event.target.closest("[data-edit-cover-requirements]");
     const invoiceEdit = event.target.closest("[data-edit-invoice]");
     const invoiceDelete = event.target.closest("[data-delete-invoice]");
     const supplyOrderXlsx = event.target.closest("[data-xlsx-supply-order]");
@@ -2536,6 +2570,7 @@ function bindEvents() {
     if (deliveryNoteEdit) editDeliveryNote(deliveryNoteEdit.dataset.editDeliveryNote);
     if (deliveryNoteDelete) removeRecord("delivery-notes", deliveryNoteDelete.dataset.deleteDeliveryNote).catch((error) => showToast(error.message, true));
     if (addCoverDelivery) openCoverDelivery(addCoverDelivery.dataset.addCoverDelivery);
+    if (editCoverRequirements) openCoverRequirements(editCoverRequirements.dataset.editCoverRequirements);
     if (invoiceEdit) editInvoice(invoiceEdit.dataset.editInvoice);
     if (invoiceDelete) removeRecord("invoices", invoiceDelete.dataset.deleteInvoice).catch((error) => showToast(error.message, true));
     if (supplyOrderXlsx) window.location.href = `/api/supply-orders/${supplyOrderXlsx.dataset.xlsxSupplyOrder}.xlsx`;
