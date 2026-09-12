@@ -65,6 +65,7 @@
         <button class="tab" data-tab="deliveryNotes" type="button">إذن التسليم</button>
         <button class="tab" data-tab="invoices" type="button">الفواتير</button>
         <button class="tab" data-tab="customerStatement" type="button">كشف حساب</button>
+        <button class="tab" data-tab="openingBalances" type="button">أرصدة أول المدة</button>
         <button class="tab" data-tab="expenses" type="button">المصروفات</button>
         <button class="tab" data-tab="treasury" type="button">الخزينة</button>
         <button class="tab" data-tab="transfers" type="button">توسيط</button>
@@ -141,7 +142,7 @@
             <label>التاريخ<input name="entry_date" type="date"></label>
             <label>الشهر<input name="month" type="number" min="1" max="12" placeholder="يحسب من التاريخ"></label>
             <label>المسؤول<select name="responsible"></select></label>
-            <label>العميل<select name="customer_id" required></select></label>
+            <label>العميل<select id="openingBalanceCustomer" name="customer_id" required></select></label>
             <label>نوع التحصيل<select name="collection_type" required></select></label>
             <label id="collectionTypeOtherWrap" class="hidden">نوع آخر<input name="collection_type_other" autocomplete="off"></label>
             <label>المبلغ<input name="amount" type="number" min="0" step="0.01" required></label>
@@ -405,6 +406,25 @@
                 </table>
               </div>
             </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="openingBalances" class="tab-panel">
+        <div class="page-action-tabs" role="tablist" aria-label="أرصدة أول المدة"><button class="page-action-tab active" data-page-mode="entry" type="button">إضافة رصيد</button><button class="page-action-tab" data-page-mode="display" type="button">عرض الأرصدة</button></div>
+        <div class="entry-layout">
+          <form id="openingBalanceForm" class="form-panel" data-page-pane="entry">
+            <h2 id="openingBalanceFormTitle">إضافة رصيد أول المدة</h2>
+            <input type="hidden" name="customer_id_edit">
+            <label>العميل<select name="customer_id" required></select></label>
+            <label>رصيد أول المدة<input name="opening_balance" type="number" step="0.01" required></label>
+            <label>تاريخ بداية المدة<input name="effective_date" type="date" value="2026-09-01" readonly></label>
+            <p class="muted wide">الموجب يعني أن العميل مدين للشركة، والسالب يعني أن للعميل رصيدًا لدى الشركة.</p>
+            <div class="form-actions"><button type="submit">حفظ الرصيد</button><button id="cancelOpeningBalanceEdit" class="secondary hidden" type="button">إلغاء التعديل</button></div>
+          </form>
+          <div class="panel" data-page-pane="display">
+            <div class="panel-head"><h2>أرصدة أول المدة المسجلة</h2><div class="filters"><select id="openingBalanceCustomerFilter"><option value="">كل العملاء</option></select></div></div>
+            <div class="table-wrap records"><table><thead><tr><th>العميل</th><th>رصيد أول المدة</th><th>تاريخ البداية</th><th>سجله</th><th>آخر تحديث</th><th></th></tr></thead><tbody id="openingBalanceRows"></tbody></table></div>
           </div>
         </div>
       </section>

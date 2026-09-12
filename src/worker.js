@@ -62,6 +62,12 @@ async function handleApi(request, env, url) {
   if (url.pathname === "/api/customers" && method === "POST") return createCustomer(request, env, user);
   if (url.pathname === "/api/customer-statement" && method === "GET") return customerStatement(env, url);
   if (url.pathname === "/api/customer-statement.xlsx" && method === "GET") return customerStatementXlsx(env, url);
+  if (url.pathname === "/api/opening-balances" && method === "GET") return listOpeningBalances(env);
+  if (url.pathname === "/api/opening-balances" && method === "POST") return createOpeningBalance(request, env, user);
+  if (url.pathname.startsWith("/api/opening-balances/")) {
+    const customerId = idFromPath(url.pathname);
+    if (method === "PUT") return updateOpeningBalance(request, env, user, customerId);
+  }
   if (url.pathname === "/api/supply-orders" && method === "GET") return listSupplyOrders(env);
   if (url.pathname === "/api/supply-orders" && method === "POST") return createSupplyOrder(request, env, user);
   if (/^\/api\/supply-orders\/\d+\.xlsx$/.test(url.pathname) && method === "GET") return supplyOrderXlsxResponse(env, idFromExportPath(url.pathname));
@@ -144,7 +150,7 @@ function authorizeApiRequest(user, pathname, method) {
       ["/api/me", "/api/bootstrap", "/api/supply-orders", "/api/delivery-notes", "/api/invoices", "/api/customer-statement", "/api/customer-statement.xlsx", "/api/backup"].includes(pathname)
       || /^\/api\/(supply-orders|delivery-notes|invoices)\/\d+\.xlsx$/.test(pathname)
     );
-    if (canRead || (method === "POST" && pathname === "/api/invoices")) return;
+    if (canRead || (method === "GET" && pathname === "/api/opening-balances") || (method === "POST" && ["/api/invoices", "/api/opening-balances"].includes(pathname))) return;
   }
   if (pathname === "/api/backup" && method === "GET") return;
   throw new HttpError("ليس لديك صلاحية للوصول إلى هذه العملية", 403);
@@ -650,7 +656,7 @@ async function listCustomers(env) {
             period_collections.last_date AS last_collection_date,
             COALESCE(opening.opening_balance, 0) + COALESCE(period_invoices.total, 0) - COALESCE(period_collections.total, 0) AS current_balance
      FROM customers
-     LEFT JOIN customer_opening_balances opening ON opening.customer_id = customers.id AND opening.effective_date = ?
+     LEFT JOIN customer_opening_balances opening ON opening.customer_id = customers.id AND opening.effective_date = ? AND opening.is_set=1
      LEFT JOIN (SELECT customer_id, SUM(total) AS total FROM invoices WHERE invoice_date >= ? GROUP BY customer_id) period_invoices ON period_invoices.customer_id = customers.id
      LEFT JOIN (SELECT customer_id, SUM(amount) AS total, COUNT(*) AS count, MAX(entry_date) AS last_date FROM collections WHERE entry_date >= ? GROUP BY customer_id) period_collections ON period_collections.customer_id = customers.id
      WHERE customers.active = 1
@@ -674,6 +680,66 @@ async function createCustomer(request, env, user) {
   const customer = await env.DB.prepare("SELECT id, name FROM customers WHERE normalized_name = ?").bind(normalized).first();
   await insertAudit(env, request, user, "INSERT", "customers", customer?.id || result.meta.last_row_id || null, null, { name, normalized_name: normalized });
   return json({ id: customer?.id || result.meta.last_row_id, name });
+}
+
+async function listOpeningBalances(env) {
+  const balances = await env.DB.prepare(
+    `SELECT opening.customer_id, customers.name AS customer_name, opening.opening_balance, opening.effective_date,
+            opening.created_at, opening.updated_at, creator.display_name AS created_by_name, updater.display_name AS updated_by_name
+     FROM customer_opening_balances opening
+     JOIN customers ON customers.id=opening.customer_id
+     LEFT JOIN users creator ON creator.id=opening.created_by
+     LEFT JOIN users updater ON updater.id=opening.updated_by
+     WHERE opening.is_set=1
+     ORDER BY customers.name`
+  ).all();
+  const available = await env.DB.prepare(
+    `SELECT customers.id, customers.name
+     FROM customers
+     LEFT JOIN customer_opening_balances opening ON opening.customer_id=customers.id
+     WHERE customers.active=1 AND COALESCE(customers.is_transient,0)=0 AND COALESCE(opening.is_set,0)=0
+     ORDER BY customers.name`
+  ).all();
+  return json({ items: balances.results, available_customers: available.results });
+}
+
+async function createOpeningBalance(request, env, user) {
+  const role = effectiveRole(user);
+  if (!['admin', 'invoice_issuer'].includes(role)) throw new HttpError("ليس لديك صلاحية لتسجيل رصيد أول المدة", 403);
+  const payload = await readJson(request);
+  const customerId = Number(payload.customer_id || 0);
+  const openingBalance = Number(payload.opening_balance);
+  if (!customerId) throw new HttpError("العميل مطلوب", 400);
+  if (!Number.isFinite(openingBalance)) throw new HttpError("رصيد أول المدة غير صحيح", 400);
+  const customer = await env.DB.prepare("SELECT id,name FROM customers WHERE id=? AND active=1 AND COALESCE(is_transient,0)=0").bind(customerId).first();
+  if (!customer) throw new HttpError("العميل غير صحيح", 400);
+  const now = nowIso();
+  const result = await env.DB.prepare(
+    `INSERT INTO customer_opening_balances(customer_id,opening_balance,effective_date,updated_by,updated_at,is_set,created_by,created_at)
+     VALUES(?,?,?,?,?,1,?,?)
+     ON CONFLICT(customer_id) DO UPDATE SET opening_balance=excluded.opening_balance,effective_date=excluded.effective_date,
+       updated_by=excluded.updated_by,updated_at=excluded.updated_at,is_set=1,created_by=excluded.created_by,created_at=excluded.created_at
+     WHERE customer_opening_balances.is_set=0`
+  ).bind(customerId, openingBalance, ACCOUNTING_START_DATE, user.id, now, user.id, now).run();
+  if (!result.meta.changes) throw new HttpError("تم تسجيل رصيد أول المدة لهذا العميل من قبل", 409);
+  await insertAudit(env, request, user, "INSERT", "customer_opening_balances", customerId, null, { customer_id: customerId, customer_name: customer.name, opening_balance: openingBalance, effective_date: ACCOUNTING_START_DATE });
+  return json({ ok: true, customer_id: customerId });
+}
+
+async function updateOpeningBalance(request, env, user, customerId) {
+  assertCanWrite(user);
+  const before = await env.DB.prepare(
+    `SELECT opening.*, customers.name AS customer_name FROM customer_opening_balances opening
+     JOIN customers ON customers.id=opening.customer_id WHERE opening.customer_id=? AND opening.is_set=1`
+  ).bind(customerId).first();
+  if (!before) throw new HttpError("رصيد أول المدة غير موجود", 404);
+  const payload = await readJson(request);
+  const openingBalance = Number(payload.opening_balance);
+  if (!Number.isFinite(openingBalance)) throw new HttpError("رصيد أول المدة غير صحيح", 400);
+  const now = nowIso();
+  await env.DB.prepare("UPDATE customer_opening_balances SET opening_balance=?,updated_by=?,updated_at=? WHERE customer_id=? AND is_set=1").bind(openingBalance, user.id, now, customerId).run();
+  await insertAudit(env, request, user, "UPDATE", "customer_opening_balances", customerId, before, { ...before, opening_balance: openingBalance, updated_by: user.id, updated_at: now });
+  return json({ ok: true, customer_id: customerId });
 }
 
 async function customerStatement(env, url) {
@@ -711,7 +777,7 @@ async function customerStatementData(env, customerId) {
   const customer = await env.DB.prepare(
     `SELECT customers.id, customers.name, COALESCE(opening.opening_balance, 0) AS opening_balance
      FROM customers
-     LEFT JOIN customer_opening_balances opening ON opening.customer_id=customers.id AND opening.effective_date=?
+     LEFT JOIN customer_opening_balances opening ON opening.customer_id=customers.id AND opening.effective_date=? AND opening.is_set=1
      WHERE customers.id=? AND customers.active=1`
   ).bind(ACCOUNTING_START_DATE, customerId).first();
   if (!customer) throw new HttpError("العميل غير صحيح", 400);
@@ -2400,7 +2466,8 @@ async function auditLog(env, user) {
 async function backup(env, user) {
   if (!user) throw new HttpError("Authentication required", 401);
   const tables = {};
-  for (const table of ["users", "payment_methods", "expense_accounts", "customers", "custody_holders", "designs", "product_sizes", "materials", "collections", "expenses", "transfers", "supply_orders", "delivery_notes", "delivery_note_items", "invoices", "invoice_items", "audit_logs"]) {
+  const backupTables = ["users", "payment_methods", "expense_accounts", "customers", "custody_holders", "designs", "product_sizes", "materials", "collections", "expenses", "transfers", "supply_orders", "delivery_notes", "delivery_note_items", "cover_delivery_events", "invoices", "invoice_items", "audit_logs"];
+  for (const table of backupTables) {
     const result = await env.DB.prepare(`SELECT * FROM ${table} ORDER BY id`).all();
     tables[table] = result.results.map((row) => {
       if (table !== "users") return row;
@@ -2409,6 +2476,7 @@ async function backup(env, user) {
       return copy;
     });
   }
+  tables.customer_opening_balances = (await env.DB.prepare("SELECT * FROM customer_opening_balances ORDER BY customer_id").all()).results;
   return json({
     exported_at: nowIso(),
     format: "tahsilat-d1-json-v1",

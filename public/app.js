@@ -17,6 +17,8 @@ const state = {
   invoices: [],
   invoiceDraft: null,
   customerStatement: null,
+  openingBalances: [],
+  openingBalanceCustomers: [],
   deliveryDraft: { index: 0, items: [] },
   deliveryStatusFilter: "incomplete",
   audit: [],
@@ -282,7 +284,7 @@ function applyRolePermissions() {
   qsa(".tab").forEach((tab) => {
     const allowedForCollector = ["collections", "supplyOrders", "deliveryNotes", "invoices", "customerStatement"].includes(tab.dataset.tab);
     const allowedForPlanner = tab.dataset.tab === "supplyOrders";
-    const allowedForInvoiceIssuer = ["supplyOrders", "deliveryNotes", "invoices", "customerStatement"].includes(tab.dataset.tab);
+    const allowedForInvoiceIssuer = ["supplyOrders", "deliveryNotes", "invoices", "customerStatement", "openingBalances"].includes(tab.dataset.tab);
     tab.classList.toggle("hidden", (collector && !allowedForCollector) || (planner && !allowedForPlanner) || (invoiceIssuer && !allowedForInvoiceIssuer));
   });
   qsa(".admin-only").forEach((item) => item.classList.toggle("hidden", !isAdmin()));
@@ -290,9 +292,9 @@ function applyRolePermissions() {
   qs("#backupBtn")?.classList.remove("hidden");
   qs("#collectionModeTabs")?.classList.toggle("hidden", !(isAdmin() || collector));
 
-  const forms = ["collectionForm", "directSaleForm", "giftForm", "customerForm", "supplyOrderForm", "deliveryNoteForm", "invoiceForm", "expenseForm", "methodForm", "transferForm", "userForm"];
+  const forms = ["collectionForm", "directSaleForm", "giftForm", "customerForm", "supplyOrderForm", "deliveryNoteForm", "invoiceForm", "openingBalanceForm", "expenseForm", "methodForm", "transferForm", "userForm"];
   forms.forEach((id) => {
-    const allowed = isAdmin() || (collector && ["collectionForm", "directSaleForm", "giftForm", "supplyOrderForm", "deliveryNoteForm"].includes(id)) || (invoiceIssuer && id === "invoiceForm");
+    const allowed = isAdmin() || (collector && ["collectionForm", "directSaleForm", "giftForm", "supplyOrderForm", "deliveryNoteForm"].includes(id)) || (invoiceIssuer && ["invoiceForm", "openingBalanceForm"].includes(id));
     qs(`#${id}`)?.classList.toggle("hidden", !allowed);
   });
   refreshPageModePermissions();
@@ -1071,6 +1073,38 @@ function renderCustomers() {
   `).join("") || `<tr><td colspan="5" class="muted">${query ? "لا يوجد عميل مطابق للبحث" : "لا توجد بيانات عملاء"}</td></tr>`;
 }
 
+function fillOpeningBalanceSelects() {
+  const formSelect = qs('#openingBalanceForm select[name="customer_id"]');
+  if (formSelect && !formSelect.disabled) {
+    formSelect.innerHTML = `<option value="">اختر العميل</option>${state.openingBalanceCustomers.map((customer) => `<option value="${customer.id}">${escapeHtml(customer.name)}</option>`).join("")}`;
+    refreshSearchableSelect(formSelect);
+  }
+  const filter = qs("#openingBalanceCustomerFilter");
+  if (filter) {
+    const current = filter.value;
+    filter.innerHTML = `<option value="">كل العملاء</option>${state.openingBalances.map((item) => `<option value="${item.customer_id}">${escapeHtml(item.customer_name)}</option>`).join("")}`;
+    filter.value = current;
+    refreshSearchableSelect(filter);
+  }
+}
+
+function renderOpeningBalances() {
+  const body = qs("#openingBalanceRows");
+  if (!body) return;
+  const customerId = qs("#openingBalanceCustomerFilter")?.value;
+  const items = state.openingBalances.filter((item) => !customerId || String(item.customer_id) === String(customerId));
+  body.innerHTML = items.map((item) => `
+    <tr>
+      <td data-label="العميل">${escapeHtml(item.customer_name)}</td>
+      <td data-label="رصيد أول المدة">${money(item.opening_balance)}</td>
+      <td data-label="تاريخ البداية">${escapeHtml(item.effective_date)}</td>
+      <td data-label="سجله">${escapeHtml(item.created_by_name || "-")}</td>
+      <td data-label="آخر تحديث">${escapeHtml(item.updated_at || "-")} ${item.updated_by_name ? `— ${escapeHtml(item.updated_by_name)}` : ""}</td>
+      <td class="actions">${isAdmin() ? `<button type="button" data-edit-opening-balance="${item.customer_id}" title="تعديل">✎</button>` : ""}</td>
+    </tr>
+  `).join("") || `<tr><td colspan="6" class="muted">لا توجد أرصدة أول مدة مسجلة</td></tr>`;
+}
+
 function renderExpenses() {
   qs("#expenseRows").innerHTML = state.expenses.map((item) => `
     <tr>
@@ -1429,7 +1463,7 @@ async function loadBootstrap() {
   state.accountingStartDate = data.accounting_start_date || "2026-09-01";
   applyRolePermissions();
   qsa('select[name="responsible"]').forEach((select) => fillSelect(select, state.responsibles));
-  qsa('select[name="customer_id"]').forEach((select) => fillCustomerSelect(select, select.value));
+  qsa('select[name="customer_id"]:not(#openingBalanceCustomer)').forEach((select) => fillCustomerSelect(select, select.value));
   fillCustomerSelect(qs("#collectionReportCustomer"), qs("#collectionReportCustomer")?.value);
   fillCustomerSelect(qs("#collectionCustomerFilter"), qs("#collectionCustomerFilter")?.value);
   fillCustomerSelect(qs("#supplyOrderCustomerFilter"), qs("#supplyOrderCustomerFilter")?.value);
@@ -1475,7 +1509,7 @@ async function loadCustomers() {
   const data = await api("/api/customers");
   state.customers = data.items;
   renderCustomers();
-  qsa('select[name="customer_id"]').forEach((select) => fillCustomerSelect(select, select.value));
+  qsa('select[name="customer_id"]:not(#openingBalanceCustomer)').forEach((select) => fillCustomerSelect(select, select.value));
   fillCustomerSelect(qs("#statementCustomer"), qs("#statementCustomer")?.value);
   fillCustomerSelect(qs("#collectionCustomerFilter"), qs("#collectionCustomerFilter")?.value);
   fillCustomerSelect(qs("#supplyOrderCustomerFilter"), qs("#supplyOrderCustomerFilter")?.value);
@@ -1483,6 +1517,14 @@ async function loadCustomers() {
   fillCustomerSelect(qs("#invoiceCustomerFilter"), qs("#invoiceCustomerFilter")?.value);
   fillSupplyOrderFormLookups();
   fillDeliveryNoteFormLookups();
+}
+
+async function loadOpeningBalances() {
+  const data = await api("/api/opening-balances");
+  state.openingBalances = data.items || [];
+  state.openingBalanceCustomers = data.available_customers || [];
+  fillOpeningBalanceSelects();
+  renderOpeningBalances();
 }
 
 async function loadExpenses() {
@@ -1605,10 +1647,10 @@ async function reloadAll() {
     return;
   }
   if (isInvoiceIssuer()) {
-    await Promise.all([loadSupplyOrders(), loadDeliveryNotes(), loadInvoices()]);
+    await Promise.all([loadSupplyOrders(), loadDeliveryNotes(), loadInvoices(), loadOpeningBalances()]);
     return;
   }
-  await Promise.all([loadDashboard(), loadCollections(), loadCustomers(), loadExpenses(), loadTransfers(), loadSupplyOrders(), loadDeliveryNotes(), loadInvoices(), loadUsers(), loadAudit(), loadExpenseReport(), loadCollectionReport(), loadResponsibleMonthly()]);
+  await Promise.all([loadDashboard(), loadCollections(), loadCustomers(), loadOpeningBalances(), loadExpenses(), loadTransfers(), loadSupplyOrders(), loadDeliveryNotes(), loadInvoices(), loadUsers(), loadAudit(), loadExpenseReport(), loadCollectionReport(), loadResponsibleMonthly()]);
 }
 
 function formData(form) {
@@ -1843,6 +1885,55 @@ async function saveCustomer(event) {
   form.reset();
   showToast("تم إضافة العميل");
   await Promise.all([loadBootstrap(), loadCustomers(), loadAudit()]);
+}
+
+function resetOpeningBalanceForm() {
+  const form = qs("#openingBalanceForm");
+  if (!form) return;
+  form.reset();
+  form.customer_id_edit.value = "";
+  form.customer_id.disabled = false;
+  qs("#openingBalanceFormTitle").textContent = "إضافة رصيد أول المدة";
+  qs("#cancelOpeningBalanceEdit").classList.add("hidden");
+  fillOpeningBalanceSelects();
+}
+
+function editOpeningBalance(customerId) {
+  if (!isAdmin()) return;
+  const item = state.openingBalances.find((row) => String(row.customer_id) === String(customerId));
+  if (!item) return;
+  setPageMode("openingBalances", "entry");
+  const form = qs("#openingBalanceForm");
+  form.customer_id_edit.value = item.customer_id;
+  form.customer_id.disabled = false;
+  form.customer_id.innerHTML = `<option value="${item.customer_id}">${escapeHtml(item.customer_name)}</option>`;
+  form.customer_id.value = item.customer_id;
+  refreshSearchableSelect(form.customer_id);
+  form.customer_id.disabled = true;
+  form.opening_balance.value = Number(item.opening_balance);
+  qs("#openingBalanceFormTitle").textContent = `تعديل رصيد أول المدة — ${item.customer_name}`;
+  qs("#cancelOpeningBalanceEdit").classList.remove("hidden");
+  form.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+async function saveOpeningBalance(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const editCustomerId = form.customer_id_edit.value;
+  const payload = { customer_id: Number(form.customer_id.value), opening_balance: Number(form.opening_balance.value) };
+  if (editCustomerId) {
+    await api(`/api/opening-balances/${editCustomerId}`, { method: "PUT", body: JSON.stringify({ opening_balance: payload.opening_balance }) });
+    showToast("تم تعديل رصيد أول المدة");
+  } else {
+    await api("/api/opening-balances", { method: "POST", body: JSON.stringify(payload) });
+    showToast("تم تسجيل رصيد أول المدة");
+  }
+  resetOpeningBalanceForm();
+  if (isInvoiceIssuer()) {
+    await loadBootstrap();
+    await loadOpeningBalances();
+  }
+  else await Promise.all([loadOpeningBalances(), loadCustomers(), loadAudit()]);
 }
 
 async function saveExpense(event) {
@@ -2420,6 +2511,7 @@ function bindEvents() {
   bindFormAction("#directSaleForm", saveDirectSale);
   bindFormAction("#giftForm", saveGift);
   bindFormAction("#customerForm", saveCustomer);
+  bindFormAction("#openingBalanceForm", saveOpeningBalance);
   bindFormAction("#supplyOrderForm", saveSupplyOrder);
   bindFormAction("#deliveryNoteForm", saveDeliveryNote);
   bindFormAction("#coverDeliveryForm", saveCoverDelivery);
@@ -2432,6 +2524,7 @@ function bindEvents() {
   qs("#cancelTransferEdit").addEventListener("click", resetTransferForm);
   qs("#cancelSupplyOrderEdit").addEventListener("click", resetSupplyOrderForm);
   qs("#cancelDeliveryNoteEdit").addEventListener("click", resetDeliveryNoteForm);
+  qs("#cancelOpeningBalanceEdit").addEventListener("click", resetOpeningBalanceForm);
   qs("#cancelCoverDeliveryBtn").addEventListener("click", () => qs("#coverDeliveryModal").classList.add("hidden"));
   qs("#cancelCoverRequirementsBtn").addEventListener("click", () => qs("#coverRequirementsModal").classList.add("hidden"));
   qs('#coverDeliveryForm select[name="delivery_note_item_id"]').addEventListener("change", updateCoverDeliverySummary);
@@ -2489,6 +2582,7 @@ function bindEvents() {
   qs("#supplyOrderCustomerFilter").addEventListener("change", renderSupplyOrders);
   qs("#deliveryNoteCustomerFilter").addEventListener("change", renderDeliveryNotes);
   qs("#invoiceCustomerFilter").addEventListener("change", renderInvoices);
+  qs("#openingBalanceCustomerFilter").addEventListener("change", renderOpeningBalances);
   qs("#customerSearch").addEventListener("input", renderCustomers);
   qs("#collectionMonth").addEventListener("change", loadCollections);
   qs('#collectionForm select[name="collection_type"]').addEventListener("change", toggleCollectionOtherType);
@@ -2559,6 +2653,7 @@ function bindEvents() {
     const deliveryNoteDelete = event.target.closest("[data-delete-delivery-note]");
     const addCoverDelivery = event.target.closest("[data-add-cover-delivery]");
     const editCoverRequirements = event.target.closest("[data-edit-cover-requirements]");
+    const editOpeningBalanceButton = event.target.closest("[data-edit-opening-balance]");
     const invoiceEdit = event.target.closest("[data-edit-invoice]");
     const invoiceDelete = event.target.closest("[data-delete-invoice]");
     const supplyOrderXlsx = event.target.closest("[data-xlsx-supply-order]");
@@ -2579,6 +2674,7 @@ function bindEvents() {
     if (deliveryNoteDelete) removeRecord("delivery-notes", deliveryNoteDelete.dataset.deleteDeliveryNote).catch((error) => showToast(error.message, true));
     if (addCoverDelivery) openCoverDelivery(addCoverDelivery.dataset.addCoverDelivery);
     if (editCoverRequirements) openCoverRequirements(editCoverRequirements.dataset.editCoverRequirements);
+    if (editOpeningBalanceButton) editOpeningBalance(editOpeningBalanceButton.dataset.editOpeningBalance);
     if (invoiceEdit) editInvoice(invoiceEdit.dataset.editInvoice);
     if (invoiceDelete) removeRecord("invoices", invoiceDelete.dataset.deleteInvoice).catch((error) => showToast(error.message, true));
     if (supplyOrderXlsx) window.location.href = `/api/supply-orders/${supplyOrderXlsx.dataset.xlsxSupplyOrder}.xlsx`;
@@ -2609,6 +2705,7 @@ async function init() {
     resetSupplyOrderForm();
     resetDeliveryNoteForm();
     resetInvoiceForm();
+    resetOpeningBalanceForm();
     applyAccountingDateConstraints();
     renderCustomerStatement();
     showApp();
