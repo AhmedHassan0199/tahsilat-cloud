@@ -76,7 +76,7 @@ async function handleApi(request, env, url) {
     if (method === "PUT") return updateSupplyOrder(request, env, user, id);
     if (method === "DELETE") return deleteRecord(env, user, "supply_orders", "supply_order", id);
   }
-  if (url.pathname === "/api/delivery-notes" && method === "GET") return listDeliveryNotes(env);
+  if (url.pathname === "/api/delivery-notes" && method === "GET") return listDeliveryNotes(env, user);
   if (url.pathname === "/api/delivery-notes" && method === "POST") return createDeliveryNote(request, env, user);
   if (/^\/api\/delivery-notes\/\d+\.xlsx$/.test(url.pathname) && method === "GET") return deliveryNoteXlsxResponse(env, idFromExportPath(url.pathname));
   if (/^\/api\/delivery-notes\/\d+\/cover-deliveries$/.test(url.pathname) && method === "POST") {
@@ -1015,7 +1015,7 @@ async function resolveLookup(env, request, user, tableName, id, newName, errorMe
   return { id: result.meta.last_row_id, name };
 }
 
-async function listDeliveryNotes(env) {
+async function listDeliveryNotes(env, user) {
   const result = await env.DB.prepare(
     `SELECT delivery_notes.*, users.display_name AS created_by_name,
             COUNT(delivery_note_items.id) AS item_count,
@@ -1040,9 +1040,11 @@ async function listDeliveryNotes(env) {
      ORDER BY cover_delivery_events.delivery_date, cover_delivery_events.id`
   ).all();
   const byNote = new Map();
+  const canSeeGeneralPrice = ["admin", "invoice_issuer"].includes(effectiveRole(user));
   items.results.forEach((item) => {
+    const visibleItem = canSeeGeneralPrice ? item : { ...item, general_price_type: null, general_unit_price: null };
     if (!byNote.has(item.delivery_note_id)) byNote.set(item.delivery_note_id, []);
-    byNote.get(item.delivery_note_id).push(item);
+    byNote.get(item.delivery_note_id).push(visibleItem);
   });
   const eventsByNote = new Map();
   events.results.forEach((event) => {
@@ -1104,6 +1106,9 @@ function deliveryItemData(payload, index) {
     quantity_unit: ["كيلو", "كرتونه"].includes(payload.quantity_unit) ? payload.quantity_unit : "كيلو",
     quantity_amount: Number(payload.quantity_amount || 0),
     required_quantity_amount: payload.required_quantity_amount === "" || payload.required_quantity_amount == null ? null : Number(payload.required_quantity_amount),
+    is_general: truthy(payload.is_general) ? 1 : 0,
+    general_price_type: String(payload.general_price_type || "").trim() || null,
+    general_unit_price: payload.general_unit_price === "" || payload.general_unit_price == null ? null : Number(payload.general_unit_price),
     note: String(payload.note || "").trim() || null,
   };
 }
@@ -1135,7 +1140,16 @@ async function prepareDeliveryNote(env, payload, options = { trackCovers: true }
   for (let index = 0; index < data.items.length; index += 1) {
     const item = deliveryItemData(data.items[index], index);
     if (!item.product_type) throw new HttpError(`نوع الصنف مطلوب في السطر ${item.line_no}`, 400);
-    if (item.product_type !== "غطيان" && !item.design_id) throw new HttpError(`التصميم مطلوب في السطر ${item.line_no}`, 400);
+    if (item.product_type === "غطيان" && item.is_general) throw new HttpError(`جينيرال متاح للكوبايات والعلب فقط في السطر ${item.line_no}`, 400);
+    if (item.product_type !== "غطيان" && !item.is_general && !item.design_id) throw new HttpError(`التصميم مطلوب في السطر ${item.line_no}`, 400);
+    if (item.is_general) {
+      if (!["with_cover", "without_cover"].includes(item.general_price_type)) throw new HttpError(`نوع سعر جينيرال مطلوب في السطر ${item.line_no}`, 400);
+      if (!Number.isFinite(item.general_unit_price) || item.general_unit_price <= 0) throw new HttpError(`سعر جينيرال مطلوب ويجب أن يكون أكبر من صفر في السطر ${item.line_no}`, 400);
+      item.design_id = null;
+    } else {
+      item.general_price_type = null;
+      item.general_unit_price = null;
+    }
     if (!item.size_id) throw new HttpError(`المقاس مطلوب في السطر ${item.line_no}`, 400);
     if (!Number.isFinite(item.quantity_amount) || item.quantity_amount < 0 || (item.product_type !== "غطيان" && item.quantity_amount <= 0)) throw new HttpError(`العدد غير صحيح في السطر ${item.line_no}`, 400);
     if (item.product_type === "غطيان" && options.trackCovers) {
@@ -1148,8 +1162,10 @@ async function prepareDeliveryNote(env, payload, options = { trackCovers: true }
     }
     const design = item.product_type === "غطيان"
       ? { id: null, name: "" }
+      : item.is_general
+        ? { id: null, name: "جينيرال" }
       : await env.DB.prepare("SELECT id, name FROM designs WHERE id = ? AND active = 1").bind(item.design_id).first();
-    if (item.product_type !== "غطيان" && !design) throw new HttpError(`التصميم غير صحيح في السطر ${item.line_no}`, 400);
+    if (item.product_type !== "غطيان" && !item.is_general && !design) throw new HttpError(`التصميم غير صحيح في السطر ${item.line_no}`, 400);
     const size = await env.DB.prepare("SELECT id, name FROM product_sizes WHERE id = ? AND active = 1").bind(item.size_id).first();
     if (!size) throw new HttpError(`المقاس غير صحيح في السطر ${item.line_no}`, 400);
     items.push({ ...item, design_id: design.id, design_name: design.name, size_name: size.name });
@@ -1166,8 +1182,8 @@ async function prepareDeliveryNote(env, payload, options = { trackCovers: true }
 async function insertDeliveryNoteItems(env, deliveryNoteId, items, options = {}) {
   for (const item of items) {
     const result = await env.DB.prepare(
-      `INSERT INTO delivery_note_items(delivery_note_id, line_no, product_type, design_id, design_name, size_id, size_name, quantity_unit, quantity_amount, required_quantity_amount, note, supply_order_id)
-       VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      `INSERT INTO delivery_note_items(delivery_note_id, line_no, product_type, design_id, design_name, size_id, size_name, quantity_unit, quantity_amount, required_quantity_amount, note, supply_order_id, is_general, general_price_type, general_unit_price)
+       VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).bind(
       deliveryNoteId,
       item.line_no,
@@ -1180,7 +1196,10 @@ async function insertDeliveryNoteItems(env, deliveryNoteId, items, options = {})
       item.quantity_amount,
       item.required_quantity_amount,
       item.note,
-      null
+      null,
+      item.is_general,
+      item.general_price_type,
+      item.general_unit_price
     ).run();
     if (options.user && item.product_type === "غطيان" && item.quantity_amount > 0) {
       await env.DB.prepare(
@@ -1299,9 +1318,9 @@ async function updateDeliveryNote(request, env, user, id) {
   statements.push(env.DB.prepare("DELETE FROM delivery_note_items WHERE delivery_note_id = ?").bind(id));
   for (const item of data.items) {
     statements.push(env.DB.prepare(
-      `INSERT INTO delivery_note_items(delivery_note_id,line_no,product_type,design_id,design_name,size_id,size_name,quantity_unit,quantity_amount,required_quantity_amount,note,supply_order_id)
-       VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`
-    ).bind(id, item.line_no, item.product_type, item.design_id, item.design_name, item.size_id, item.size_name, item.quantity_unit, item.quantity_amount, item.required_quantity_amount, item.note, null));
+      `INSERT INTO delivery_note_items(delivery_note_id,line_no,product_type,design_id,design_name,size_id,size_name,quantity_unit,quantity_amount,required_quantity_amount,note,supply_order_id,is_general,general_price_type,general_unit_price)
+       VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+    ).bind(id, item.line_no, item.product_type, item.design_id, item.design_name, item.size_id, item.size_name, item.quantity_unit, item.quantity_amount, item.required_quantity_amount, item.note, null, item.is_general, item.general_price_type, item.general_unit_price));
   }
 
   let requiresInvoiceReview = false;
@@ -1327,12 +1346,13 @@ async function updateDeliveryNote(request, env, user, id) {
       const oldInvoiceItem = item.source_item_id ? oldInvoiceItems.get(String(item.source_item_id)) : null;
       const identityChanged = customerChanged || !oldNoteItem || !oldInvoiceItem
         || oldNoteItem.product_type !== item.product_type
+        || Boolean(oldNoteItem.is_general) !== Boolean(item.is_general)
         || Number(oldNoteItem.design_id || 0) !== Number(item.design_id || 0)
         || Number(oldNoteItem.size_id || 0) !== Number(item.size_id || 0);
-      if (identityChanged) requiresInvoiceReview = linkedInvoice.transaction_type !== "gift";
-      const preservePrice = !identityChanged && oldInvoiceItem;
-      const unitPrice = gift ? 0 : preservePrice ? Number(oldInvoiceItem.unit_price || 0) : 0;
-      const retainedSupplyOrderId = gift ? null : preservePrice ? Number(oldInvoiceItem.supply_order_id || 0) || null : null;
+      if (identityChanged && !item.is_general) requiresInvoiceReview = linkedInvoice.transaction_type !== "gift";
+      const preservePrice = !item.is_general && !identityChanged && oldInvoiceItem;
+      const unitPrice = gift ? 0 : item.is_general ? Number(item.general_unit_price) : preservePrice ? Number(oldInvoiceItem.unit_price || 0) : 0;
+      const retainedSupplyOrderId = gift || item.is_general ? null : preservePrice ? Number(oldInvoiceItem.supply_order_id || 0) || null : null;
       const orderKey = String(retainedSupplyOrderId || "");
       const order = supplyOrders.get(orderKey);
       const serial = gift || !order || serialOrders.has(orderKey)
@@ -1342,7 +1362,7 @@ async function updateDeliveryNote(request, env, user, id) {
       return {
         ...item,
         supply_order_id: retainedSupplyOrderId,
-        price_type: gift ? "gift" : preservePrice ? oldInvoiceItem.price_type : "pending",
+        price_type: gift ? "gift" : item.is_general ? item.general_price_type : preservePrice ? oldInvoiceItem.price_type : "pending",
         unit_price: unitPrice,
         line_total: Number(item.quantity_amount || 0) * unitPrice,
         serial_color_price: serial.price,
@@ -1617,7 +1637,14 @@ async function prepareInvoice(env, payload, invoiceId = null) {
     let priceType = String(payloadItem.price_type || "").trim();
     let unitPrice = Number(payloadItem.unit_price || 0);
     let order = null;
-    if (noteItem.product_type === "غطيان") {
+    if (noteItem.is_general) {
+      supplyOrderId = null;
+      priceType = String(noteItem.general_price_type || "");
+      unitPrice = Number(noteItem.general_unit_price);
+      if (!["with_cover", "without_cover"].includes(priceType) || !Number.isFinite(unitPrice) || unitPrice <= 0) {
+        throw new HttpError(`سعر جينيرال غير مكتمل في السطر ${noteItem.line_no}`, 400);
+      }
+    } else if (noteItem.product_type === "غطيان") {
       supplyOrderId = null;
       priceType = "manual";
       if (!Number.isFinite(unitPrice) || unitPrice < 0) throw new HttpError(`سعر الغطيان غير صحيح في السطر ${noteItem.line_no}`, 400);

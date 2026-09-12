@@ -541,8 +541,21 @@ function blankDeliveryItem() {
     quantity_unit: "كيلو",
     quantity_amount: "",
     required_quantity_amount: "",
+    is_general: false,
+    general_price_type: "without_cover",
+    general_unit_price: "",
     note: "",
   };
+}
+
+function fillDeliveryDesignSelect(select, current = "") {
+  fillExistingLookupSelect(select, state.designs, "اختر التصميم");
+  const generalOption = document.createElement("option");
+  generalOption.value = "__general";
+  generalOption.textContent = "جينيرال";
+  select.appendChild(generalOption);
+  if (current) select.value = current;
+  refreshSearchableSelect(select);
 }
 
 function fillDeliveryNoteFormLookups() {
@@ -550,7 +563,7 @@ function fillDeliveryNoteFormLookups() {
   if (!form) return;
   fillCustomerSelect(form.customer_id, form.customer_id.value);
   fillRequiredResponsible(form.responsible, form.responsible.value);
-  fillExistingLookupSelect(form.design_id, state.designs, "اختر التصميم", form.design_id.value);
+  fillDeliveryDesignSelect(form.design_id, form.design_id.value);
   fillExistingLookupSelect(form.size_id, state.productSizes, "اختر المقاس", form.size_id.value);
 }
 
@@ -565,14 +578,23 @@ function toggleDeliveryProductType() {
   const form = qs("#deliveryNoteForm");
   if (!form) return;
   const isCovers = form.product_type.value === "غطيان";
+  const isGeneral = !isCovers && form.design_id.value === "__general";
   qs("#deliveryDesignWrap").classList.toggle("hidden", isCovers);
   qs("#deliveryRequiredQuantityWrap").classList.toggle("hidden", !isCovers);
+  qs("#deliveryGeneralPriceTypeWrap").classList.toggle("hidden", !isGeneral);
+  qs("#deliveryGeneralUnitPriceWrap").classList.toggle("hidden", !isGeneral);
   qs("#deliveryQuantityLegend").textContent = isCovers ? "الكمية المسلمة الآن" : "العدد";
   form.design_id.required = !isCovers;
   form.required_quantity_amount.required = isCovers;
+  form.general_price_type.required = isGeneral;
+  form.general_unit_price.required = isGeneral;
   form.quantity_amount.min = isCovers ? "0" : "0.01";
   if (isCovers) form.design_id.value = "";
   else form.required_quantity_amount.value = "";
+  if (!isGeneral) {
+    form.general_price_type.value = "without_cover";
+    form.general_unit_price.value = "";
+  }
 }
 
 function deliveryCurrentItem() {
@@ -583,15 +605,19 @@ function saveVisibleDeliveryItem() {
   const form = qs("#deliveryNoteForm");
   if (!form) return;
   const isCovers = form.product_type.value === "غطيان";
+  const isGeneral = !isCovers && form.design_id.value === "__general";
   const current = deliveryCurrentItem();
   state.deliveryDraft.items[state.deliveryDraft.index] = {
     source_item_id: current.source_item_id || null,
     product_type: form.product_type.value,
-    design_id: isCovers ? "" : form.design_id.value,
+    design_id: isCovers || isGeneral ? "" : form.design_id.value,
     size_id: form.size_id.value,
     quantity_unit: form.quantity_unit.value,
     quantity_amount: form.quantity_amount.value,
     required_quantity_amount: isCovers ? form.required_quantity_amount.value : "",
+    is_general: isGeneral,
+    general_price_type: isGeneral ? form.general_price_type.value : "",
+    general_unit_price: isGeneral ? form.general_unit_price.value : "",
     note: form.item_note.value.trim(),
   };
 }
@@ -602,11 +628,13 @@ function showDeliveryItem(index) {
   state.deliveryDraft.index = Math.max(0, Math.min(index, state.deliveryDraft.items.length - 1));
   const item = deliveryCurrentItem();
   form.product_type.value = item.product_type || "كوبايات - علب";
-  fillExistingLookupSelect(form.design_id, state.designs, "اختر التصميم", item.design_id || "");
+  fillDeliveryDesignSelect(form.design_id, item.is_general ? "__general" : item.design_id || "");
   fillExistingLookupSelect(form.size_id, state.productSizes, "اختر المقاس", item.size_id || "");
   form.quantity_unit.value = item.quantity_unit || "كيلو";
   form.quantity_amount.value = item.quantity_amount || "";
   form.required_quantity_amount.value = item.required_quantity_amount || "";
+  form.general_price_type.value = item.general_price_type || "without_cover";
+  form.general_unit_price.value = item.general_unit_price || "";
   form.item_note.value = item.note || "";
   toggleDeliveryProductType();
   qs("#deliveryItemCounter").textContent = `الصنف ${state.deliveryDraft.index + 1} من ${state.deliveryDraft.items.length}`;
@@ -629,7 +657,7 @@ function renderDeliveryDraftRows() {
       <tr class="${index === state.deliveryDraft.index ? "selected-row" : ""}">
         <td data-label="#">${index + 1}</td>
         <td data-label="الصنف">${item.product_type || "-"}</td>
-        <td data-label="التصميم">${design?.name || "-"}</td>
+        <td data-label="التصميم">${item.is_general ? "جينيرال" : design?.name || "-"}</td>
         <td data-label="المقاس">${size?.name || "-"}</td>
         <td data-label="العدد">${quantityText}</td>
         <td data-label="ملاحظة">${item.note || "-"}</td>
@@ -710,8 +738,8 @@ function buildInvoiceDraft(note) {
     items: (note.items || []).map((item) => ({
       delivery_note_item_id: item.id,
       supply_order_id: "",
-      price_type: item.product_type === "غطيان" ? "manual" : "without_cover",
-      unit_price: 0,
+      price_type: item.is_general ? item.general_price_type : item.product_type === "غطيان" ? "manual" : "without_cover",
+      unit_price: item.is_general ? Number(item.general_unit_price || 0) : 0,
     })),
   };
 }
@@ -787,7 +815,7 @@ function renderInvoiceEditor() {
   }
   host.innerHTML = (note.items || []).map((noteItem, index) => {
     const draftItem = state.invoiceDraft.items[index];
-    const orders = noteItem.product_type === "غطيان" ? [] : matchingSupplyOrders(note, noteItem);
+    const orders = noteItem.product_type === "غطيان" || noteItem.is_general ? [] : matchingSupplyOrders(note, noteItem);
     const selectedOrder = state.supplyOrders.find((order) => String(order.id) === String(draftItem.supply_order_id));
     if (selectedOrder && draftItem.price_type === "with_cover") draftItem.unit_price = Number(selectedOrder.price_with_cover || 0);
     if (selectedOrder && draftItem.price_type === "without_cover") draftItem.unit_price = Number(selectedOrder.price_without_cover || 0);
@@ -802,6 +830,10 @@ function renderInvoiceEditor() {
         ${noteItem.product_type === "غطيان" ? `
           <input type="hidden" name="price_type" value="manual">
           <label>سعر الغطيان<input name="unit_price" type="number" min="0" step="0.01" value="${draftItem.unit_price || 0}"></label>
+        ` : noteItem.is_general ? `
+          <input type="hidden" name="price_type" value="${noteItem.general_price_type}">
+          <label>نوع السعر<input type="text" value="${noteItem.general_price_type === "with_cover" ? "بغطاء" : "بدون غطاء"}" readonly></label>
+          <label>السعر المسجل في إذن التسليم<input name="unit_price" type="number" value="${Number(noteItem.general_unit_price || 0)}" readonly></label>
         ` : `
           <label>أمر التوريد<select name="supply_order_id" required>
             <option value="">اختر أمر التوريد</option>
@@ -1997,7 +2029,7 @@ async function saveDeliveryNote(event) {
   event.preventDefault();
   const form = event.currentTarget;
   saveVisibleDeliveryItem();
-  const items = state.deliveryDraft.items.filter((item) => item.design_id || item.size_id || item.quantity_amount);
+  const items = state.deliveryDraft.items.filter((item) => item.design_id || item.is_general || item.size_id || item.quantity_amount);
   if (!form.customer_id.value) throw new Error("العميل مطلوب");
   if (!items.length) throw new Error("يجب إضافة صنف واحد على الأقل");
   const payload = {
@@ -2108,7 +2140,7 @@ function invoicePayload() {
   const items = (note.items || []).map((noteItem) => {
     const draftItem = state.invoiceDraft.items.find((row) => String(row.delivery_note_item_id) === String(noteItem.id));
     if (!draftItem) throw new Error(`بيانات الصنف ${noteItem.line_no} ناقصة`);
-    if (noteItem.product_type !== "غطيان" && !draftItem.supply_order_id) throw new Error(`اختر أمر التوريد للصنف ${noteItem.line_no}`);
+    if (noteItem.product_type !== "غطيان" && !noteItem.is_general && !draftItem.supply_order_id) throw new Error(`اختر أمر التوريد للصنف ${noteItem.line_no}`);
     if (!Number.isFinite(Number(draftItem.unit_price)) || Number(draftItem.unit_price) < 0) throw new Error(`السعر غير صحيح للصنف ${noteItem.line_no}`);
     return {
       delivery_note_item_id: noteItem.id,
@@ -2339,6 +2371,9 @@ function editDeliveryNote(id) {
       quantity_unit: row.quantity_unit || "كيلو",
       quantity_amount: row.quantity_amount || "",
       required_quantity_amount: row.required_quantity_amount || "",
+      is_general: Boolean(row.is_general),
+      general_price_type: row.general_price_type || "without_cover",
+      general_unit_price: row.general_unit_price ?? "",
       note: row.note || "",
     })),
   };
@@ -2367,8 +2402,8 @@ function editInvoice(id) {
       return {
         delivery_note_item_id: noteItem.id,
         supply_order_id: invoiceItem?.supply_order_id || "",
-        price_type: invoiceItem?.price_type || (noteItem.product_type === "غطيان" ? "manual" : "without_cover"),
-        unit_price: invoiceItem?.unit_price || 0,
+        price_type: invoiceItem?.price_type || (noteItem.is_general ? noteItem.general_price_type : noteItem.product_type === "غطيان" ? "manual" : "without_cover"),
+        unit_price: invoiceItem?.unit_price ?? (noteItem.is_general ? Number(noteItem.general_unit_price || 0) : 0),
       };
     }),
   };
