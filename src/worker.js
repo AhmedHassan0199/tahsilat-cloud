@@ -91,6 +91,7 @@ async function handleApi(request, env, url) {
     if (method === "DELETE") return deleteDeliveryNote(env, user, id);
   }
   if (url.pathname === "/api/invoices" && method === "GET") return listInvoices(env);
+  if (url.pathname === "/api/invoice-balance-preview" && method === "GET") return invoiceBalancePreview(env, url);
   if (url.pathname === "/api/invoices" && method === "POST") return createInvoice(request, env, user);
   if (/^\/api\/invoices\/\d+\.xlsx$/.test(url.pathname) && method === "GET") return invoiceXlsxResponse(env, idFromExportPath(url.pathname));
   if (url.pathname.startsWith("/api/invoices/")) {
@@ -147,7 +148,7 @@ function authorizeApiRequest(user, pathname, method) {
   }
   if (role === "invoice_issuer") {
     const canRead = method === "GET" && (
-      ["/api/me", "/api/bootstrap", "/api/supply-orders", "/api/delivery-notes", "/api/invoices", "/api/customer-statement", "/api/customer-statement.xlsx", "/api/backup"].includes(pathname)
+      ["/api/me", "/api/bootstrap", "/api/supply-orders", "/api/delivery-notes", "/api/invoices", "/api/invoice-balance-preview", "/api/customer-statement", "/api/customer-statement.xlsx", "/api/backup"].includes(pathname)
       || /^\/api\/(supply-orders|delivery-notes|invoices)\/\d+\.xlsx$/.test(pathname)
     );
     if (canRead || (method === "GET" && pathname === "/api/opening-balances") || (method === "POST" && ["/api/invoices", "/api/opening-balances"].includes(pathname))) return;
@@ -1398,27 +1399,136 @@ async function listInvoices(env) {
      FROM invoices
      LEFT JOIN invoice_items ON invoice_items.invoice_id = invoices.id
      LEFT JOIN users ON users.id = invoices.created_by
+     WHERE invoices.invoice_date >= ?
      GROUP BY invoices.id
      ORDER BY COALESCE(invoice_date, '') DESC, invoices.id DESC
      LIMIT 300`
-  ).all();
+  ).bind(ACCOUNTING_START_DATE).all();
   const items = await env.DB.prepare(
     `SELECT invoice_items.*
      FROM invoice_items
      JOIN invoices ON invoices.id = invoice_items.invoice_id
+     WHERE invoices.invoice_date >= ?
      ORDER BY invoice_items.invoice_id DESC, invoice_items.line_no`
-  ).all();
+  ).bind(ACCOUNTING_START_DATE).all();
   const byInvoice = new Map();
   items.results.forEach((item) => {
     if (!byInvoice.has(item.invoice_id)) byInvoice.set(item.invoice_id, []);
     byInvoice.get(item.invoice_id).push(item);
   });
-  return json({ items: result.results.map((invoice) => ({ ...invoice, items: byInvoice.get(invoice.id) || [] })) });
+  const invoices = result.results.map((invoice) => ({ ...invoice, items: byInvoice.get(invoice.id) || [] }));
+  return json({ items: await addInvoiceBalances(env, invoices) });
+}
+
+function accountingEventCompare(left, right) {
+  const dateOrder = String(left.date || "").localeCompare(String(right.date || ""));
+  if (dateOrder) return dateOrder;
+  const createdOrder = String(left.created_at || "").localeCompare(String(right.created_at || ""));
+  if (createdOrder) return createdOrder;
+  if (left.kind !== right.kind) return left.kind === "invoice" ? -1 : 1;
+  return Number(left.id || 0) - Number(right.id || 0);
+}
+
+function currencyValue(value) {
+  return Math.round((Number(value || 0) + Number.EPSILON) * 100) / 100;
+}
+
+async function addInvoiceBalances(env, requestedInvoices) {
+  if (!requestedInvoices.length) return [];
+  const [openingRows, invoiceRows, collectionRows] = await Promise.all([
+    env.DB.prepare(
+      `SELECT customer_id, opening_balance FROM customer_opening_balances
+       WHERE effective_date = ? AND is_set = 1`
+    ).bind(ACCOUNTING_START_DATE).all(),
+    env.DB.prepare(
+      `SELECT id, customer_id, invoice_date, total, transaction_type, transaction_token, created_at
+       FROM invoices WHERE invoice_date >= ? AND customer_id IS NOT NULL`
+    ).bind(ACCOUNTING_START_DATE).all(),
+    env.DB.prepare(
+      `SELECT id, customer_id, entry_date, amount, transaction_type, transaction_token, invoice_id, created_at
+       FROM collections WHERE entry_date >= ? AND customer_id IS NOT NULL`
+    ).bind(ACCOUNTING_START_DATE).all(),
+  ]);
+  const openingByCustomer = new Map(openingRows.results.map((row) => [String(row.customer_id), currencyValue(row.opening_balance)]));
+  const eventsByCustomer = new Map();
+  const addEvent = (customerId, event) => {
+    const key = String(customerId);
+    if (!eventsByCustomer.has(key)) eventsByCustomer.set(key, []);
+    eventsByCustomer.get(key).push(event);
+  };
+  invoiceRows.results.forEach((row) => addEvent(row.customer_id, { ...row, kind: "invoice", date: row.invoice_date }));
+  collectionRows.results.forEach((row) => addEvent(row.customer_id, { ...row, kind: "collection", date: row.entry_date }));
+
+  const balancesByInvoice = new Map();
+  eventsByCustomer.forEach((events, customerId) => {
+    let balance = openingByCustomer.get(customerId) || 0;
+    const directInvoiceByToken = new Map();
+    events.sort(accountingEventCompare).forEach((event) => {
+      if (event.kind === "invoice") {
+        const before = balance;
+        balance = currencyValue(balance + Number(event.total || 0));
+        const details = {
+          balance_before: before,
+          balance_after_invoice: balance,
+          immediate_collection_amount: 0,
+          balance_after_operation: balance,
+        };
+        balancesByInvoice.set(String(event.id), details);
+        if (event.transaction_type === "direct_cash" && event.transaction_token) {
+          directInvoiceByToken.set(String(event.transaction_token), String(event.id));
+        }
+      } else {
+        balance = currencyValue(balance - Number(event.amount || 0));
+        if (event.transaction_type === "direct_cash") {
+          const invoiceKey = event.invoice_id ? String(event.invoice_id) : directInvoiceByToken.get(String(event.transaction_token || ""));
+          const details = invoiceKey ? balancesByInvoice.get(invoiceKey) : null;
+          if (details) {
+            details.immediate_collection_amount = currencyValue(event.amount);
+            details.balance_after_operation = balance;
+          }
+        }
+      }
+    });
+  });
+  return requestedInvoices.map((invoice) => ({
+    ...invoice,
+    ...(balancesByInvoice.get(String(invoice.id)) || {
+      balance_before: 0,
+      balance_after_invoice: currencyValue(invoice.total),
+      immediate_collection_amount: 0,
+      balance_after_operation: currencyValue(invoice.total),
+    }),
+  }));
+}
+
+async function invoiceBalancePreview(env, url) {
+  const customerId = Number(url.searchParams.get("customer_id") || 0);
+  const invoiceDate = parseDateValue(url.searchParams.get("invoice_date"));
+  const invoiceId = Number(url.searchParams.get("invoice_id") || 0) || null;
+  if (!customerId || !invoiceDate || invoiceDate < ACCOUNTING_START_DATE) throw new HttpError("بيانات حساب الرصيد غير صحيحة", 400);
+  if (invoiceId) {
+    const existing = await invoiceWithItems(env, invoiceId);
+    if (!existing || Number(existing.customer_id) !== customerId || String(existing.invoice_date || "") < ACCOUNTING_START_DATE) {
+      throw new HttpError("الفاتورة غير صحيحة", 400);
+    }
+    if (String(existing.invoice_date) === invoiceDate) {
+      const enriched = (await addInvoiceBalances(env, [existing]))[0];
+      return json({ balance_before: enriched.balance_before });
+    }
+  }
+  const row = await env.DB.prepare(
+    `SELECT
+       COALESCE((SELECT opening_balance FROM customer_opening_balances WHERE customer_id=? AND effective_date=? AND is_set=1),0)
+       + COALESCE((SELECT SUM(total) FROM invoices WHERE customer_id=? AND invoice_date>=? AND invoice_date<=? AND (? IS NULL OR id<>?)),0)
+       - COALESCE((SELECT SUM(amount) FROM collections WHERE customer_id=? AND entry_date>=? AND entry_date<=?),0) AS balance_before`
+  ).bind(customerId, ACCOUNTING_START_DATE, customerId, ACCOUNTING_START_DATE, invoiceDate, invoiceId, invoiceId, customerId, ACCOUNTING_START_DATE, invoiceDate).first();
+  return json({ balance_before: currencyValue(row?.balance_before) });
 }
 
 async function invoiceXlsxResponse(env, id) {
-  const invoice = await invoiceWithItems(env, id);
-  if (!invoice) throw new HttpError("Record not found", 404);
+  const rawInvoice = await invoiceWithItems(env, id);
+  if (!rawInvoice || String(rawInvoice.invoice_date || "") < ACCOUNTING_START_DATE) throw new HttpError("Record not found", 404);
+  const invoice = (await addInvoiceBalances(env, [rawInvoice]))[0];
   if (invoice.items.some((item) => item.price_type === "pending")) throw new HttpError("يجب استكمال مراجعة وتسعير الفاتورة أولا", 409);
   const rows = [];
   const addRow = (values, style = "normal", mergeAcross = 0) => rows.push({ values, style, mergeAcross });
@@ -1433,6 +1543,12 @@ async function invoiceXlsxResponse(env, id) {
   addRow(["", "", "", "", "", "", "", "إجمالي السريل", Number(invoice.serial_total || 0) > 0 ? invoice.serial_total : "لا يوجد سريل"], "total");
   addRow(["", "", "", "", "", "", "", "مصاريف النقل", invoice.delivery_charge || 0], "total");
   addRow(["", "", "", "", "", "", "", "إجمالي الفاتورة", invoice.total || 0], "total");
+  addRow(["", "", "", "", "", "", "", "رصيد العميل قبل الفاتورة", invoice.balance_before], "total");
+  addRow(["", "", "", "", "", "", "", "الرصيد بعد الفاتورة", invoice.balance_after_invoice], "total");
+  if (invoice.transaction_type === "direct_cash") {
+    addRow(["", "", "", "", "", "", "", "التحصيل النقدي الفوري", invoice.immediate_collection_amount], "total");
+    addRow(["", "", "", "", "", "", "", "الرصيد بعد إتمام البيع النقدي", invoice.balance_after_operation], "total");
+  }
   const prepared = normalizeSheetRows(rows);
   const file = reportXlsx(`فاتورة ${id}`, prepared.rows, prepared.merges, {
     brandLogo: await xlsxBrandLogo(env),

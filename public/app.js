@@ -1225,7 +1225,9 @@ function renderInvoices() {
       <td data-label="العميل">${item.customer_name || "-"}</td>
       <td data-label="المسؤول">${item.responsible || "-"}</td>
       <td data-label="الأصناف">${money(item.item_count)}</td>
-      <td data-label="الإجمالي">${money(item.total)} ${item.transaction_type === "gift" ? `<span class="gift-badge">مجانية</span>` : ""} ${item.requires_review ? `<span class="review-badge">يحتاج مراجعة</span>` : ""}</td>
+      <td data-label="الرصيد قبلها">${money(item.balance_before)}</td>
+      <td data-label="قيمة الفاتورة">${money(item.total)} ${item.transaction_type === "gift" ? `<span class="gift-badge">مجانية</span>` : ""} ${item.requires_review ? `<span class="review-badge">يحتاج مراجعة</span>` : ""}</td>
+      <td data-label="الرصيد بعدها">${money(item.balance_after_invoice)}${item.transaction_type === "direct_cash" ? `<br><small class="muted">بعد التحصيل الفوري: ${money(item.balance_after_operation)}</small>` : ""}</td>
       <td data-label="المستخدم">${item.created_by_name || "-"}</td>
       <td class="actions">
         ${isAdmin() && !isArchivedDate(item.invoice_date) ? `<button type="button" data-edit-invoice="${item.id}" title="تعديل">✎</button>` : ""}
@@ -1233,7 +1235,7 @@ function renderInvoices() {
         ${isAdmin() && !isArchivedDate(item.invoice_date) ? `<button class="danger" type="button" data-delete-invoice="${item.id}" title="حذف">×</button>` : isAdmin() ? `<span class="muted">للعرض فقط</span>` : ""}
       </td>
     </tr>
-  `).join("") || `<tr><td colspan="9" class="muted">لا توجد فواتير مسجلة</td></tr>`;
+  `).join("") || `<tr><td colspan="11" class="muted">لا توجد فواتير مسجلة</td></tr>`;
 }
 
 function renderUsers() {
@@ -1434,7 +1436,7 @@ function printInvoice(id) {
   printDocument(`فاتورة #${invoice.id}`, [
     { type: "meta", rows: [["التاريخ", invoice.invoice_date || "-"], ["العميل", invoice.customer_name || "-"], ["المسؤول", invoice.responsible || "-"], ["إذن التسليم", `#${invoice.delivery_note_id}`]] },
     { type: "table", title: "الأصناف", headers: ["#", "الصنف", "التصميم", "المقاس", "العدد", "أمر التوريد", "السعر", "السريل", "الإجمالي"], rows: (invoice.items || []).map((item) => [item.line_no, item.product_type, item.design_name || "-", item.size_name || "-", `${money(item.quantity_amount)} ${item.quantity_unit || ""}`, item.supply_order_id ? `#${item.supply_order_id}` : "-", money(item.unit_price), Number(item.serial_total || 0) > 0 ? money(item.serial_total) : "لا يوجد سريل", money(item.line_total)]) },
-    { type: "totals", rows: [["إجمالي الأصناف", money(invoice.subtotal)], ["إجمالي السريل", Number(invoice.serial_total || 0) > 0 ? money(invoice.serial_total) : "لا يوجد سريل"], ["مصاريف النقل", money(invoice.delivery_charge)], ["إجمالي الفاتورة", money(invoice.total)]] },
+    { type: "totals", rows: [["إجمالي الأصناف", money(invoice.subtotal)], ["إجمالي السريل", Number(invoice.serial_total || 0) > 0 ? money(invoice.serial_total) : "لا يوجد سريل"], ["مصاريف النقل", money(invoice.delivery_charge)], ["رصيد العميل قبل الفاتورة", money(invoice.balance_before)], ["قيمة الفاتورة", money(invoice.total)], ["الرصيد بعد الفاتورة", money(invoice.balance_after_invoice)], ...(invoice.transaction_type === "direct_cash" ? [["التحصيل النقدي الفوري", money(invoice.immediate_collection_amount)], ["الرصيد بعد إتمام البيع النقدي", money(invoice.balance_after_operation)]] : [])] },
   ], { branded: true });
 }
 
@@ -2124,10 +2126,16 @@ function invoicePayload() {
   };
 }
 
-function showInvoiceReview() {
+async function showInvoiceReview() {
   const payload = invoicePayload();
   const note = selectedDeliveryNote();
   const totals = invoiceTotals();
+  const editingId = qs('#invoiceForm input[name="id"]')?.value;
+  const balanceParams = new URLSearchParams({ customer_id: note.customer_id, invoice_date: payload.invoice_date });
+  if (editingId) balanceParams.set("invoice_id", editingId);
+  const balancePreview = await api(`/api/invoice-balance-preview?${balanceParams.toString()}`);
+  const balanceBefore = Number(balancePreview.balance_before || 0);
+  const balanceAfterInvoice = balanceBefore + Number(totals.total || 0);
   const rows = (note.items || []).map((noteItem) => {
     const draftItem = state.invoiceDraft.items.find((item) => String(item.delivery_note_item_id) === String(noteItem.id));
     const order = state.supplyOrders.find((item) => String(item.id) === String(draftItem?.supply_order_id));
@@ -2158,7 +2166,9 @@ function showInvoiceReview() {
       <div><dt>إجمالي الأصناف</dt><dd>${money(totals.subtotal)}</dd></div>
       <div><dt>إجمالي السريل</dt><dd>${totals.serialTotal > 0 ? money(totals.serialTotal) : "لا يوجد سريل"}</dd></div>
       <div><dt>مصاريف النقل</dt><dd>${money(payload.delivery_charge)}</dd></div>
-      <div><dt>إجمالي الفاتورة</dt><dd>${money(totals.total)}</dd></div>
+      <div><dt>رصيد العميل قبل الفاتورة</dt><dd>${money(balanceBefore)}</dd></div>
+      <div><dt>قيمة الفاتورة</dt><dd>${money(totals.total)}</dd></div>
+      <div><dt>الرصيد بعد الفاتورة</dt><dd>${money(balanceAfterInvoice)}</dd></div>
     </dl>
   `;
   qs("#invoiceReviewModal").classList.remove("hidden");
@@ -2539,11 +2549,7 @@ function bindEvents() {
     renderInvoiceEditor();
   });
   qs("#reviewInvoiceBtn").addEventListener("click", () => {
-    try {
-      showInvoiceReview();
-    } catch (error) {
-      showToast(error.message, true);
-    }
+    showInvoiceReview().catch((error) => showToast(error.message, true));
   });
   qs("#issueInvoiceBtn").addEventListener("click", () => {
     issueInvoice().catch((error) => showToast(error.message, true));
