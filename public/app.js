@@ -531,6 +531,7 @@ function fillSupplyOrderFormLookups() {
   fillLookupSelect(form.material_id, state.materials, "اختر الخامة", "خامة جديدة", form.material_id.value);
   fillRequiredResponsible(form.responsible, form.responsible.value);
   toggleSupplyNewFields();
+  syncCustomerResponsible(form);
 }
 
 function blankDeliveryItem() {
@@ -565,6 +566,7 @@ function fillDeliveryNoteFormLookups() {
   fillRequiredResponsible(form.responsible, form.responsible.value);
   fillDeliveryDesignSelect(form.design_id, form.design_id.value);
   fillExistingLookupSelect(form.size_id, state.productSizes, "اختر المقاس", form.size_id.value);
+  syncCustomerResponsible(form);
 }
 
 function fillRequiredResponsible(select, current = "") {
@@ -572,6 +574,16 @@ function fillRequiredResponsible(select, current = "") {
   fillSelect(select, ["", ...state.responsibles], current);
   select.options[0].textContent = "اختر المسؤول";
   select.required = true;
+}
+
+function syncCustomerResponsible(form) {
+  if (!form?.customer_id || !form?.responsible) return;
+  const customer = state.customers.find((item) => String(item.id) === String(form.customer_id.value));
+  const fixed = customer?.responsible && state.responsibles.includes(customer.responsible) ? customer.responsible : "";
+  if (fixed) form.responsible.value = fixed;
+  form.responsible.disabled = Boolean(fixed);
+  const searchable = searchableSelects.get(form.responsible);
+  if (searchable) searchable.input.disabled = Boolean(fixed);
 }
 
 function toggleDeliveryProductType() {
@@ -1097,12 +1109,23 @@ function renderCustomers() {
   body.innerHTML = customers.map((item) => `
     <tr>
       <td data-label="العميل">${escapeHtml(item.name)}</td>
+      <td data-label="المسؤول">${isAdmin() ? `<select data-customer-responsible-select="${item.id}"><option value="">غير محدد</option>${state.responsibles.map((name) => `<option value="${escapeHtml(name)}" ${item.responsible === name ? "selected" : ""}>${escapeHtml(name)}</option>`).join("")}</select><button type="button" data-save-customer-responsible="${item.id}">حفظ</button>` : escapeHtml(item.responsible || "غير محدد")}</td>
       <td data-label="رصيد بداية المدة">${money(item.opening_balance)}</td>
       <td data-label="الرصيد الحالي">${money(item.current_balance)}</td>
       <td data-label="تحصيلات الفترة">${money(item.period_collections)}</td>
       <td data-label="آخر تحصيل">${escapeHtml(item.last_collection_date || "-")}</td>
     </tr>
-  `).join("") || `<tr><td colspan="5" class="muted">${query ? "لا يوجد عميل مطابق للبحث" : "لا توجد بيانات عملاء"}</td></tr>`;
+  `).join("") || `<tr><td colspan="6" class="muted">${query ? "لا يوجد عميل مطابق للبحث" : "لا توجد بيانات عملاء"}</td></tr>`;
+  qsa("select[data-customer-responsible-select]", body).forEach(enhanceSearchableSelect);
+}
+
+async function saveCustomerResponsible(id) {
+  if (!isAdmin()) return;
+  const select = qs(`[data-customer-responsible-select="${id}"]`);
+  if (!select) return;
+  await api(`/api/customers/${id}/responsible`, { method: "PUT", body: JSON.stringify({ responsible: select.value }) });
+  showToast("تم تحديث مسؤول العميل");
+  await Promise.all([loadBootstrap(), loadCustomers(), loadAudit()]);
 }
 
 function fillOpeningBalanceSelects() {
@@ -1361,6 +1384,7 @@ function renderResponsibleMonthly() {
       <td data-label="نورا">${money(item.noura)}</td>
       <td data-label="محمد حسن">${money(item.mohamed_hassan)}</td>
       <td data-label="المصريه">${money(item.egyptian)}</td>
+      <td data-label="المصرية 2">${money(item.egyptian_2)}</td>
       <td data-label="الإجمالي">${money(item.total)}</td>
     </tr>
   `).join("");
@@ -2008,6 +2032,7 @@ async function saveSupplyOrder(event) {
   event.preventDefault();
   const form = event.currentTarget;
   const data = formData(form);
+  data.responsible = form.responsible.value;
   const id = data.id;
   delete data.id;
   ["customer_id", "design_id", "size_id", "material_id"].forEach((key) => {
@@ -2334,6 +2359,7 @@ function editSupplyOrder(id) {
   fillLookupSelect(form.size_id, state.productSizes, "اختر المقاس", "مقاس جديد", item.size_id || "");
   fillLookupSelect(form.material_id, state.materials, "اختر الخامة", "خامة جديدة", item.material_id || "");
   toggleSupplyNewFields();
+  syncCustomerResponsible(form);
   form.quantity_unit.value = item.quantity_unit || "كيلو";
   form.quantity_amount.value = item.quantity_amount || "";
   form.price_without_cover.value = item.price_without_cover || 0;
@@ -2360,6 +2386,7 @@ function editDeliveryNote(id) {
   form.delivery_date.value = item.delivery_date || "";
   fillCustomerSelect(form.customer_id, item.customer_id || "");
   fillRequiredResponsible(form.responsible, item.responsible || "");
+  syncCustomerResponsible(form);
   form.note.value = item.note || "";
   state.deliveryDraft = {
     index: 0,
@@ -2651,10 +2678,14 @@ function bindEvents() {
   qs('#transferForm select[name="source_method"]').addEventListener("change", toggleTransferCustody);
   qs('#transferForm select[name="target_method"]').addEventListener("change", toggleTransferCustody);
   qsa('#supplyOrderForm select').forEach((select) => {
-    select.addEventListener("change", toggleSupplyNewFields);
+    select.addEventListener("change", () => {
+      toggleSupplyNewFields();
+      if (select.name === "customer_id") syncCustomerResponsible(qs("#supplyOrderForm"));
+    });
   });
   qsa('#deliveryNoteForm input, #deliveryNoteForm select, #deliveryNoteForm textarea').forEach((field) => {
     field.addEventListener("change", () => {
+      if (field.name === "customer_id") syncCustomerResponsible(qs("#deliveryNoteForm"));
       toggleDeliveryProductType();
       saveVisibleDeliveryItem();
       renderDeliveryDraftRows();
@@ -2703,6 +2734,7 @@ function bindEvents() {
     const deliveryNotePdf = event.target.closest("[data-pdf-delivery-note]");
     const invoiceXlsx = event.target.closest("[data-xlsx-invoice]");
     const invoicePdf = event.target.closest("[data-pdf-invoice]");
+    const saveCustomerResponsibleButton = event.target.closest("[data-save-customer-responsible]");
     if (collectionEdit) editCollection(collectionEdit.dataset.editCollection);
     if (collectionDelete) removeRecord("collections", collectionDelete.dataset.deleteCollection).catch((error) => showToast(error.message, true));
     if (expenseEdit) editExpense(expenseEdit.dataset.editExpense);
@@ -2724,6 +2756,7 @@ function bindEvents() {
     if (deliveryNotePdf) printDeliveryNote(deliveryNotePdf.dataset.pdfDeliveryNote);
     if (invoiceXlsx) window.location.href = `/api/invoices/${invoiceXlsx.dataset.xlsxInvoice}.xlsx`;
     if (invoicePdf) printInvoice(invoicePdf.dataset.pdfInvoice);
+    if (saveCustomerResponsibleButton) saveCustomerResponsible(saveCustomerResponsibleButton.dataset.saveCustomerResponsible).catch((error) => showToast(error.message, true));
   });
 }
 

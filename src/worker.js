@@ -4,7 +4,7 @@ const PASSWORD_ITERATIONS = 20000;
 const JSON_HEADERS = { "content-type": "application/json; charset=utf-8" };
 const ACCOUNTING_START_DATE = "2026-09-01";
 
-const RESPONSIBLES = ["ا/ نورا السيد", "ا/ محمد حسن", "الشركة المصرية"];
+const RESPONSIBLES = ["ا/ نورا السيد", "ا/ محمد حسن", "الشركة المصرية", "المصرية 2"];
 const COLLECTION_TYPES = ["كرومو", "منتج تام علب", "منتج تام اكواب", "قص", "طباعة", "دشت", "أخرى"];
 const CUSTODY_METHOD = "عهدة";
 const CRC32_TABLE = Array.from({ length: 256 }, (_, index) => {
@@ -60,6 +60,9 @@ async function handleApi(request, env, url) {
   }
   if (url.pathname === "/api/customers" && method === "GET") return listCustomers(env);
   if (url.pathname === "/api/customers" && method === "POST") return createCustomer(request, env, user);
+  if (/^\/api\/customers\/\d+\/responsible$/.test(url.pathname) && method === "PUT") {
+    return updateCustomerResponsible(request, env, user, Number(url.pathname.split("/")[3]));
+  }
   if (url.pathname === "/api/customer-statement" && method === "GET") return customerStatement(env, url);
   if (url.pathname === "/api/customer-statement.xlsx" && method === "GET") return customerStatementXlsx(env, url);
   if (url.pathname === "/api/opening-balances" && method === "GET") return listOpeningBalances(env);
@@ -346,7 +349,7 @@ async function bootstrap(env, user) {
   const restricted = collector || planner || invoiceIssuer;
   const paymentMethods = (planner || invoiceIssuer) ? { results: [] } : await env.DB.prepare("SELECT id, name, note FROM payment_methods WHERE active = 1 ORDER BY name").all();
   const expenseAccounts = restricted ? { results: [] } : await env.DB.prepare("SELECT id, category, code, name FROM expense_accounts WHERE active = 1 ORDER BY category DESC, CAST(code AS INTEGER)").all().catch(() => ({ results: [] }));
-  const customers = planner ? { results: [] } : await env.DB.prepare("SELECT id, name FROM customers WHERE active = 1 ORDER BY name").all().catch(() => ({ results: [] }));
+  const customers = planner ? { results: [] } : await env.DB.prepare("SELECT id, name, responsible FROM customers WHERE active = 1 ORDER BY name").all().catch(() => ({ results: [] }));
   const custodyHolders = (planner || invoiceIssuer) ? { results: [] } : await env.DB.prepare("SELECT id, name FROM custody_holders WHERE active = 1 ORDER BY name").all().catch(() => ({ results: [] }));
   const designs = planner ? { results: [] } : await env.DB.prepare("SELECT id, name FROM designs WHERE active = 1 ORDER BY name").all().catch(() => ({ results: [] }));
   const productSizes = planner ? { results: [] } : await env.DB.prepare("SELECT id, name FROM product_sizes WHERE active = 1 ORDER BY name").all().catch(() => ({ results: [] }));
@@ -649,7 +652,7 @@ async function listCollections(env, url) {
 
 async function listCustomers(env) {
   const result = await env.DB.prepare(
-    `SELECT customers.id, customers.name, customers.active, customers.created_at,
+    `SELECT customers.id, customers.name, customers.responsible, customers.active, customers.created_at,
             COALESCE(opening.opening_balance, 0) AS opening_balance,
             COALESCE(period_invoices.total, 0) AS period_invoices,
             COALESCE(period_collections.total, 0) AS period_collections,
@@ -681,6 +684,18 @@ async function createCustomer(request, env, user) {
   const customer = await env.DB.prepare("SELECT id, name FROM customers WHERE normalized_name = ?").bind(normalized).first();
   await insertAudit(env, request, user, "INSERT", "customers", customer?.id || result.meta.last_row_id || null, null, { name, normalized_name: normalized });
   return json({ id: customer?.id || result.meta.last_row_id, name });
+}
+
+async function updateCustomerResponsible(request, env, user, id) {
+  assertCanWrite(user);
+  const before = await env.DB.prepare("SELECT id, name, responsible FROM customers WHERE id=? AND active=1").bind(id).first();
+  if (!before) throw new HttpError("العميل غير موجود", 404);
+  const payload = await readJson(request);
+  const responsible = String(payload.responsible || "").trim() || null;
+  if (responsible && !RESPONSIBLES.includes(responsible)) throw new HttpError("المسؤول غير صحيح", 400);
+  await env.DB.prepare("UPDATE customers SET responsible=?,updated_at=? WHERE id=?").bind(responsible, nowIso(), id).run();
+  await insertAudit(env, request, user, "UPDATE_RESPONSIBLE", "customers", id, before, { ...before, responsible });
+  return json({ ok: true, responsible });
 }
 
 async function listOpeningBalances(env) {
@@ -917,13 +932,14 @@ async function prepareSupplyOrder(env, request, user, payload) {
   const design = await resolveLookup(env, request, user, "designs", data.design_id, data.new_design_name, "اسم التصميم مطلوب");
   const size = await resolveLookup(env, request, user, "product_sizes", data.size_id, data.new_size_name, "المقاس المطلوب مطلوب");
   const material = await resolveLookup(env, request, user, "materials", data.material_id, data.new_material_name, "الخامة مطلوبة");
-  if (!RESPONSIBLES.includes(data.responsible)) throw new HttpError("المسؤول مطلوب ويجب اختياره من القائمة", 400);
   if (!Number.isFinite(data.quantity_amount) || data.quantity_amount <= 0) throw new HttpError("الكمية المطلوبة يجب أن تكون أكبر من صفر", 400);
   if (!Number.isFinite(data.price_without_cover) || data.price_without_cover < 0) throw new HttpError("السعر بدون غطاء غير صحيح", 400);
   if (!Number.isFinite(data.price_with_cover) || data.price_with_cover < 0) throw new HttpError("السعر بالغطاء غير صحيح", 400);
   if (!Number.isFinite(data.serial_color_price) || data.serial_color_price < 0) throw new HttpError("سعر السريل للون واحد غير صحيح", 400);
+  const responsible = await resolveCustomerResponsible(env, request, user, customer, data.responsible);
   return {
     ...data,
+    responsible,
     customer_id: customer.id,
     customer_name: customer.name,
     design_id: design.id,
@@ -977,14 +993,14 @@ async function updateSupplyOrder(request, env, user, id) {
 
 async function resolveSupplyCustomer(env, request, user, data) {
   if (data.customer_id) {
-    const customer = await env.DB.prepare("SELECT id, name FROM customers WHERE id = ? AND active = 1").bind(data.customer_id).first();
+    const customer = await env.DB.prepare("SELECT id, name, responsible FROM customers WHERE id = ? AND active = 1").bind(data.customer_id).first();
     if (!customer) throw new HttpError("العميل غير صحيح", 400);
     return customer;
   }
   const name = data.new_customer_name;
   if (!name) throw new HttpError("اسم العميل مطلوب", 400);
   const normalized = normalizedCustomerKey(name);
-  const existing = await env.DB.prepare("SELECT id, name FROM customers WHERE normalized_name = ?").bind(normalized).first();
+  const existing = await env.DB.prepare("SELECT id, name, responsible FROM customers WHERE normalized_name = ?").bind(normalized).first();
   if (existing) throw new HttpError("العميل موجود بالفعل، اختره من القائمة", 400);
   const now = nowIso();
   const result = await env.DB.prepare(
@@ -992,7 +1008,23 @@ async function resolveSupplyCustomer(env, request, user, data) {
      VALUES(?, ?, 1, ?, ?)`
   ).bind(name, normalized, now, now).run();
   await insertAudit(env, request, user, "INSERT", "customers", result.meta.last_row_id, null, { name, normalized_name: normalized, source: "supply_order" });
-  return { id: result.meta.last_row_id, name };
+  return { id: result.meta.last_row_id, name, responsible: null };
+}
+
+async function resolveCustomerResponsible(env, request, user, customer, requestedValue) {
+  const fixed = String(customer.responsible || "").trim();
+  if (RESPONSIBLES.includes(fixed)) return fixed;
+  const requested = selectedResponsible(requestedValue);
+  const before = { id: customer.id, name: customer.name, responsible: null };
+  const result = await env.DB.prepare(
+    "UPDATE customers SET responsible=?,updated_at=? WHERE id=? AND (responsible IS NULL OR TRIM(responsible)='')"
+  ).bind(requested, nowIso(), customer.id).run();
+  const current = await env.DB.prepare("SELECT responsible FROM customers WHERE id=?").bind(customer.id).first();
+  if (!RESPONSIBLES.includes(current?.responsible)) throw new HttpError("تعذر تثبيت مسؤول العميل؛ أعد المحاولة", 409);
+  if (result.meta.changes) {
+    await insertAudit(env, request, user, "ASSIGN_RESPONSIBLE", "customers", customer.id, before, { ...before, responsible: current.responsible });
+  }
+  return current.responsible;
 }
 
 async function resolveLookup(env, request, user, tableName, id, newName, errorMessage) {
@@ -1090,7 +1122,7 @@ function deliveryNoteData(payload) {
   return {
     delivery_date: parseDateValue(payload.delivery_date) || new Date().toISOString().slice(0, 10),
     customer_id: Number(payload.customer_id || 0) || null,
-    responsible: selectedResponsible(payload.responsible),
+    responsible: String(payload.responsible || "").trim(),
     note: String(payload.note || "").trim() || null,
     items: Array.isArray(payload.items) ? payload.items : [],
   };
@@ -1115,7 +1147,7 @@ function deliveryItemData(payload, index) {
 
 async function createDeliveryNote(request, env, user) {
   assertCanWrite(user, { allowCollector: true });
-  const data = await prepareDeliveryNote(env, await readJson(request));
+  const data = await prepareDeliveryNote(env, request, user, await readJson(request));
   assertAccountingDate(data.delivery_date, "تاريخ إذن التسليم");
   const now = nowIso();
   const result = await env.DB.prepare(
@@ -1129,11 +1161,11 @@ async function createDeliveryNote(request, env, user) {
   return json({ id: deliveryNoteId, item_count: data.items.length });
 }
 
-async function prepareDeliveryNote(env, payload, options = { trackCovers: true }) {
+async function prepareDeliveryNote(env, request, user, payload, options = { trackCovers: true }) {
   const data = deliveryNoteData(payload);
   if (!data.customer_id) throw new HttpError("العميل مطلوب", 400);
   if (!data.items.length) throw new HttpError("يجب إضافة صنف واحد على الأقل في إذن التسليم", 400);
-  const customer = await env.DB.prepare("SELECT id, name FROM customers WHERE id = ? AND active = 1").bind(data.customer_id).first();
+  const customer = await env.DB.prepare("SELECT id, name, responsible FROM customers WHERE id = ? AND active = 1").bind(data.customer_id).first();
   if (!customer) throw new HttpError("العميل غير صحيح", 400);
 
   const items = [];
@@ -1170,8 +1202,10 @@ async function prepareDeliveryNote(env, payload, options = { trackCovers: true }
     if (!size) throw new HttpError(`المقاس غير صحيح في السطر ${item.line_no}`, 400);
     items.push({ ...item, design_id: design.id, design_name: design.name, size_name: size.name });
   }
+  const responsible = await resolveCustomerResponsible(env, request, user, customer, data.responsible);
   return {
     ...data,
+    responsible,
     fulfillment_status: options.trackCovers && items.some((item) => item.product_type === "غطيان" && item.quantity_amount < item.required_quantity_amount) ? "incomplete" : "completed",
     customer_id: customer.id,
     customer_name: customer.name,
@@ -1302,7 +1336,7 @@ async function updateDeliveryNote(request, env, user, id) {
   const activateCoverTracking = Array.isArray(payload.items) && payload.items.some((item) =>
     item.product_type === "غطيان" && item.required_quantity_amount !== "" && item.required_quantity_amount != null
   );
-  const data = await prepareDeliveryNote(env, payload, { trackCovers: activateCoverTracking });
+  const data = await prepareDeliveryNote(env, request, user, payload, { trackCovers: activateCoverTracking });
   assertAccountingDate(data.delivery_date, "تاريخ إذن التسليم");
   const linkedInvoiceRow = await env.DB.prepare("SELECT id FROM invoices WHERE delivery_note_id = ?").bind(id).first();
   const linkedInvoice = linkedInvoiceRow ? await invoiceWithItems(env, linkedInvoiceRow.id) : null;
@@ -2124,6 +2158,7 @@ async function responsibleMonthlyReport(env) {
        COALESCE((SELECT SUM(amount) FROM collections WHERE month=m AND responsible='ا/ نورا السيد'),0) AS noura,
        COALESCE((SELECT SUM(amount) FROM collections WHERE month=m AND responsible='ا/ محمد حسن'),0) AS mohamed_hassan,
        COALESCE((SELECT SUM(amount) FROM collections WHERE month=m AND responsible='الشركة المصرية'),0) AS egyptian,
+       COALESCE((SELECT SUM(amount) FROM collections WHERE month=m AND responsible='المصرية 2'),0) AS egyptian_2,
        COALESCE((SELECT SUM(amount) FROM collections WHERE month=m),0) AS total
      FROM months
      ORDER BY m`
