@@ -1377,14 +1377,21 @@ function printSupplyOrder(id) {
 function printDeliveryNote(id) {
   const note = state.deliveryNotes.find((row) => String(row.id) === String(id));
   if (!note) return;
-  printDocument(`إذن تسليم #${note.id}`, [
-    { type: "meta", rows: [["التاريخ", note.delivery_date || "-"], ["العميل", note.customer_name || "-"], ["المسؤول", note.responsible || note.created_by_name || "-"], ["ملاحظة عامة", note.note || "-"]] },
-    { type: "table", title: "الأصناف", headers: ["#", "الصنف", "التصميم", "المقاس", "المسلم / المستحق / المتبقي", "ملاحظة"], rows: (note.items || []).map((item) => {
+  const itemById = new Map((note.items || []).map((item) => [String(item.id), item]));
+  const blocks = [
+    { type: "meta", rows: [["التاريخ", note.delivery_date || "-"], ["العميل", note.customer_name || "-"], ["المسؤول", note.responsible || note.created_by_name || "-"], ["الحالة", note.fulfillment_status === "incomplete" ? "غير مكتمل" : "مكتمل"], ["ملاحظة عامة", note.note || "-"]] },
+    { type: "table", title: "الأصناف", headers: ["#", "الصنف", "التصميم", "المقاس", "المسلّم", "إجمالي المستحق", "المتبقي", "ملاحظة"], rows: (note.items || []).map((item) => {
       const tracked = item.product_type === "غطيان" && item.required_quantity_amount != null;
-      const quantity = tracked ? `${money(item.quantity_amount)} / ${money(item.required_quantity_amount)} / ${money(Math.max(0, Number(item.required_quantity_amount) - Number(item.quantity_amount || 0)))} ${item.quantity_unit || ""}` : `${money(item.quantity_amount)} ${item.quantity_unit || ""}`;
-      return [item.line_no, item.product_type, item.design_name || "-", item.size_name || "-", quantity, item.note || "-"];
+      return [item.line_no, item.product_type, item.design_name || "-", item.size_name || "-", `${money(item.quantity_amount)} ${item.quantity_unit || ""}`, tracked ? `${money(item.required_quantity_amount)} ${item.quantity_unit || ""}` : "-", tracked ? `${money(Math.max(0, Number(item.required_quantity_amount) - Number(item.quantity_amount || 0)))} ${item.quantity_unit || ""}` : "-", item.note || "-"];
     }) },
-  ], { branded: true });
+  ];
+  if ((note.cover_deliveries || []).length) {
+    blocks.push({ type: "table", title: "سجل دفعات الغطيان", headers: ["التاريخ", "المقاس", "الكمية", "ملاحظة", "المستخدم"], rows: note.cover_deliveries.map((event) => {
+      const item = itemById.get(String(event.delivery_note_item_id));
+      return [event.delivery_date || "-", item?.size_name || "غطاء", `${money(event.quantity_amount)} ${item?.quantity_unit || ""}`, event.note || "-", event.created_by_name || "-"];
+    }) });
+  }
+  printDocument(`إذن تسليم #${note.id}`, blocks, { branded: true });
 }
 
 function printInvoice(id) {
