@@ -1212,7 +1212,11 @@ async function updateDeliveryNote(request, env, user, id) {
   if (!before) throw new HttpError("Record not found", 404);
   assertRecordNotArchived(before, "delivery_date");
   if (before.items.some((item) => item.required_quantity_amount != null)) throw new HttpError("استخدم استكمال تسليم الغطيان لهذا الإذن؛ بيانات التتبع محمية من التعديل العام", 409);
-  const data = await prepareDeliveryNote(env, await readJson(request), { trackCovers: false });
+  const payload = await readJson(request);
+  const activateCoverTracking = Array.isArray(payload.items) && payload.items.some((item) =>
+    item.product_type === "غطيان" && item.required_quantity_amount !== "" && item.required_quantity_amount != null
+  );
+  const data = await prepareDeliveryNote(env, payload, { trackCovers: activateCoverTracking });
   assertAccountingDate(data.delivery_date, "تاريخ إذن التسليم");
   const linkedInvoiceRow = await env.DB.prepare("SELECT id FROM invoices WHERE delivery_note_id = ?").bind(id).first();
   const linkedInvoice = linkedInvoiceRow ? await invoiceWithItems(env, linkedInvoiceRow.id) : null;
