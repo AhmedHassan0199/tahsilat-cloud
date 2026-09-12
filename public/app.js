@@ -2281,7 +2281,7 @@ function bindEvents() {
     tab.addEventListener("click", () => setActiveTab(tab.dataset.tab));
   });
 
-  qsa(".page-action-tab").forEach((button) => {
+  qsa(".page-action-tab[data-page-mode]").forEach((button) => {
     button.addEventListener("click", () => setPageMode(button.closest(".tab-panel"), button.dataset.pageMode));
   });
 
