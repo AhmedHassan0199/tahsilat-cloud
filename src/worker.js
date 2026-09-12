@@ -1289,7 +1289,7 @@ async function updateDeliveryNote(request, env, user, id) {
     for (const item of syncedItems) {
       statements.push(env.DB.prepare(
         `INSERT INTO invoice_items(invoice_id,delivery_note_item_id,line_no,product_type,design_id,design_name,size_id,size_name,quantity_unit,quantity_amount,supply_order_id,price_type,unit_price,line_total,serial_color_price,serial_colors_count,serial_total)
-         VALUES(?,(SELECT id FROM delivery_note_items WHERE delivery_note_id=? AND line_no=?),?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+         VALUES(?,(SELECT id FROM delivery_note_items WHERE delivery_note_id=? AND line_no=?),?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
       ).bind(linkedInvoice.id, id, item.line_no, item.line_no, item.product_type, item.design_id, item.design_name, item.size_id, item.size_name, item.quantity_unit, item.quantity_amount, item.supply_order_id, item.price_type, item.unit_price, item.line_total, item.serial_color_price, item.serial_colors_count, item.serial_total));
     }
     statements.push(env.DB.prepare(
