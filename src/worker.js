@@ -73,6 +73,9 @@ async function handleApi(request, env, url) {
   if (url.pathname === "/api/delivery-notes" && method === "GET") return listDeliveryNotes(env);
   if (url.pathname === "/api/delivery-notes" && method === "POST") return createDeliveryNote(request, env, user);
   if (/^\/api\/delivery-notes\/\d+\.xlsx$/.test(url.pathname) && method === "GET") return deliveryNoteXlsxResponse(env, idFromExportPath(url.pathname));
+  if (/^\/api\/delivery-notes\/\d+\/cover-deliveries$/.test(url.pathname) && method === "POST") {
+    return addCoverDelivery(request, env, user, Number(url.pathname.split("/")[3]));
+  }
   if (url.pathname.startsWith("/api/delivery-notes/")) {
     const id = idFromPath(url.pathname);
     if (method === "PUT") return updateDeliveryNote(request, env, user, id);
@@ -122,7 +125,8 @@ function authorizeApiRequest(user, pathname, method) {
       ["/api/me", "/api/bootstrap", "/api/collections", "/api/supply-orders", "/api/delivery-notes", "/api/invoices", "/api/customer-statement", "/api/customer-statement.xlsx", "/api/backup"].includes(pathname)
       || /^\/api\/(supply-orders|delivery-notes|invoices)\/\d+\.xlsx$/.test(pathname)
     );
-    const canInsert = method === "POST" && ["/api/collections", "/api/supply-orders", "/api/delivery-notes", "/api/direct-sales", "/api/gifts"].includes(pathname);
+    const canInsert = method === "POST" && (["/api/collections", "/api/supply-orders", "/api/delivery-notes", "/api/direct-sales", "/api/gifts"].includes(pathname)
+      || /^\/api\/delivery-notes\/\d+\/cover-deliveries$/.test(pathname));
     if (canRead || canInsert) return;
   }
   if (role === "planner") {
@@ -959,12 +963,23 @@ async function listDeliveryNotes(env) {
      JOIN delivery_notes ON delivery_notes.id = delivery_note_items.delivery_note_id
      ORDER BY delivery_note_items.delivery_note_id DESC, delivery_note_items.line_no`
   ).all();
+  const events = await env.DB.prepare(
+    `SELECT cover_delivery_events.*, users.display_name AS created_by_name
+     FROM cover_delivery_events
+     LEFT JOIN users ON users.id = cover_delivery_events.created_by
+     ORDER BY cover_delivery_events.delivery_date, cover_delivery_events.id`
+  ).all();
   const byNote = new Map();
   items.results.forEach((item) => {
     if (!byNote.has(item.delivery_note_id)) byNote.set(item.delivery_note_id, []);
     byNote.get(item.delivery_note_id).push(item);
   });
-  return json({ items: result.results.map((note) => ({ ...note, items: byNote.get(note.id) || [] })) });
+  const eventsByNote = new Map();
+  events.results.forEach((event) => {
+    if (!eventsByNote.has(event.delivery_note_id)) eventsByNote.set(event.delivery_note_id, []);
+    eventsByNote.get(event.delivery_note_id).push(event);
+  });
+  return json({ items: result.results.map((note) => ({ ...note, items: byNote.get(note.id) || [], cover_deliveries: eventsByNote.get(note.id) || [] })) });
 }
 
 async function deliveryNoteXlsxResponse(env, id) {
@@ -977,8 +992,14 @@ async function deliveryNoteXlsxResponse(env, id) {
   addRow(["رقم الإذن", note.id, "التاريخ", note.delivery_date || "", "العميل", note.customer_name || ""], "meta");
   addRow(["المسؤول", note.responsible || "", "ملاحظة عامة", note.note || "", "", ""], "meta");
   addRow(["", "", "", "", "", ""], "normal");
-  addRow(["#", "الصنف", "التصميم", "المقاس", "العدد", "ملاحظة"], "header");
-  note.items.forEach((item) => addRow([item.line_no, item.product_type, item.design_name || "", item.size_name || "", `${item.quantity_amount || 0} ${item.quantity_unit || ""}`, item.note || ""]));
+  addRow(["#", "الصنف", "التصميم", "المقاس", "المسلم / المستحق / المتبقي", "ملاحظة"], "header");
+  note.items.forEach((item) => {
+    const tracked = item.product_type === "غطيان" && item.required_quantity_amount != null;
+    const quantity = tracked
+      ? `${item.quantity_amount || 0} / ${item.required_quantity_amount} / ${Math.max(0, Number(item.required_quantity_amount) - Number(item.quantity_amount || 0))} ${item.quantity_unit || ""}`
+      : `${item.quantity_amount || 0} ${item.quantity_unit || ""}`;
+    addRow([item.line_no, item.product_type, item.design_name || "", item.size_name || "", quantity, item.note || ""]);
+  });
   const prepared = normalizeSheetRows(rows);
   const file = reportXlsx(`إذن تسليم ${id}`, prepared.rows, prepared.merges, {
     brandLogo: await xlsxBrandLogo(env),
@@ -1012,6 +1033,7 @@ function deliveryItemData(payload, index) {
     size_id: Number(payload.size_id || 0) || null,
     quantity_unit: ["كيلو", "كرتونه"].includes(payload.quantity_unit) ? payload.quantity_unit : "كيلو",
     quantity_amount: Number(payload.quantity_amount || 0),
+    required_quantity_amount: payload.required_quantity_amount === "" || payload.required_quantity_amount == null ? null : Number(payload.required_quantity_amount),
     note: String(payload.note || "").trim() || null,
   };
 }
@@ -1022,17 +1044,17 @@ async function createDeliveryNote(request, env, user) {
   assertAccountingDate(data.delivery_date, "تاريخ إذن التسليم");
   const now = nowIso();
   const result = await env.DB.prepare(
-    `INSERT INTO delivery_notes(delivery_date, customer_id, customer_name, responsible, note, created_by, created_at, updated_at)
-     VALUES(?, ?, ?, ?, ?, ?, ?, ?)`
-  ).bind(data.delivery_date, data.customer_id, data.customer_name, data.responsible, data.note, user.id, now, now).run();
+    `INSERT INTO delivery_notes(delivery_date, customer_id, customer_name, responsible, note, fulfillment_status, created_by, created_at, updated_at)
+     VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).bind(data.delivery_date, data.customer_id, data.customer_name, data.responsible, data.note, data.fulfillment_status, user.id, now, now).run();
   const deliveryNoteId = result.meta.last_row_id;
 
-  await insertDeliveryNoteItems(env, deliveryNoteId, data.items);
+  await insertDeliveryNoteItems(env, deliveryNoteId, data.items, { user, deliveryDate: data.delivery_date });
   await insertAudit(env, request, user, "INSERT", "delivery_notes", deliveryNoteId, null, data);
   return json({ id: deliveryNoteId, item_count: data.items.length });
 }
 
-async function prepareDeliveryNote(env, payload) {
+async function prepareDeliveryNote(env, payload, options = { trackCovers: true }) {
   const data = deliveryNoteData(payload);
   if (!data.customer_id) throw new HttpError("العميل مطلوب", 400);
   if (!data.items.length) throw new HttpError("يجب إضافة صنف واحد على الأقل في إذن التسليم", 400);
@@ -1045,7 +1067,15 @@ async function prepareDeliveryNote(env, payload) {
     if (!item.product_type) throw new HttpError(`نوع الصنف مطلوب في السطر ${item.line_no}`, 400);
     if (item.product_type !== "غطيان" && !item.design_id) throw new HttpError(`التصميم مطلوب في السطر ${item.line_no}`, 400);
     if (!item.size_id) throw new HttpError(`المقاس مطلوب في السطر ${item.line_no}`, 400);
-    if (!Number.isFinite(item.quantity_amount) || item.quantity_amount <= 0) throw new HttpError(`العدد يجب أن يكون أكبر من صفر في السطر ${item.line_no}`, 400);
+    if (!Number.isFinite(item.quantity_amount) || item.quantity_amount < 0 || (item.product_type !== "غطيان" && item.quantity_amount <= 0)) throw new HttpError(`العدد غير صحيح في السطر ${item.line_no}`, 400);
+    if (item.product_type === "غطيان" && options.trackCovers) {
+      if (!Number.isFinite(item.required_quantity_amount) || item.required_quantity_amount <= 0) throw new HttpError(`إجمالي الغطاء المستحق مطلوب في السطر ${item.line_no}`, 400);
+      if (item.quantity_amount > item.required_quantity_amount) throw new HttpError(`الغطاء المسلم أكبر من المستحق في السطر ${item.line_no}`, 400);
+    } else if (item.product_type !== "غطيان") {
+      item.required_quantity_amount = null;
+    } else {
+      item.required_quantity_amount = null;
+    }
     const design = item.product_type === "غطيان"
       ? { id: null, name: "" }
       : await env.DB.prepare("SELECT id, name FROM designs WHERE id = ? AND active = 1").bind(item.design_id).first();
@@ -1056,17 +1086,18 @@ async function prepareDeliveryNote(env, payload) {
   }
   return {
     ...data,
+    fulfillment_status: options.trackCovers && items.some((item) => item.product_type === "غطيان" && item.quantity_amount < item.required_quantity_amount) ? "incomplete" : "completed",
     customer_id: customer.id,
     customer_name: customer.name,
     items,
   };
 }
 
-async function insertDeliveryNoteItems(env, deliveryNoteId, items) {
+async function insertDeliveryNoteItems(env, deliveryNoteId, items, options = {}) {
   for (const item of items) {
-    await env.DB.prepare(
-      `INSERT INTO delivery_note_items(delivery_note_id, line_no, product_type, design_id, design_name, size_id, size_name, quantity_unit, quantity_amount, note, supply_order_id)
-       VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    const result = await env.DB.prepare(
+      `INSERT INTO delivery_note_items(delivery_note_id, line_no, product_type, design_id, design_name, size_id, size_name, quantity_unit, quantity_amount, required_quantity_amount, note, supply_order_id)
+       VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).bind(
       deliveryNoteId,
       item.line_no,
@@ -1077,10 +1108,54 @@ async function insertDeliveryNoteItems(env, deliveryNoteId, items) {
       item.size_name,
       item.quantity_unit,
       item.quantity_amount,
+      item.required_quantity_amount,
       item.note,
       null
     ).run();
+    if (options.user && item.product_type === "غطيان" && item.quantity_amount > 0) {
+      await env.DB.prepare(
+        `INSERT INTO cover_delivery_events(delivery_note_id,delivery_note_item_id,delivery_date,quantity_amount,note,created_by,created_at)
+         VALUES(?,?,?,?,?,?,?)`
+      ).bind(deliveryNoteId, result.meta.last_row_id, options.deliveryDate, item.quantity_amount, item.note, options.user.id, nowIso()).run();
+    }
   }
+}
+
+async function addCoverDelivery(request, env, user, deliveryNoteId) {
+  if (!["admin", "collector"].includes(effectiveRole(user))) throw new HttpError("ليس لديك صلاحية لتسجيل تسليم الغطاء", 403);
+  const payload = await readJson(request);
+  const itemId = Number(payload.delivery_note_item_id || 0);
+  const quantity = Number(payload.quantity_amount || 0);
+  const deliveryDate = parseDateValue(payload.delivery_date) || new Date().toISOString().slice(0, 10);
+  const note = String(payload.note || "").trim() || null;
+  assertAccountingDate(deliveryDate, "تاريخ تسليم الغطاء");
+  if (!itemId || !Number.isFinite(quantity) || quantity <= 0) throw new HttpError("كمية تسليم الغطاء غير صحيحة", 400);
+  const item = await env.DB.prepare(
+    `SELECT delivery_note_items.*, delivery_notes.fulfillment_status
+     FROM delivery_note_items JOIN delivery_notes ON delivery_notes.id=delivery_note_items.delivery_note_id
+     WHERE delivery_note_items.id=? AND delivery_note_items.delivery_note_id=? AND delivery_note_items.product_type='غطيان'`
+  ).bind(itemId, deliveryNoteId).first();
+  if (!item || !Number.isFinite(Number(item.required_quantity_amount))) throw new HttpError("بند الغطاء غير صالح للمتابعة", 400);
+  const remaining = Number(item.required_quantity_amount) - Number(item.quantity_amount || 0);
+  if (remaining <= 0) throw new HttpError("تم تسليم كامل كمية الغطاء", 400);
+  if (quantity > remaining) throw new HttpError(`الكمية أكبر من المتبقي (${remaining})`, 400);
+  const now = nowIso();
+  const result = await env.DB.prepare(
+    `UPDATE delivery_note_items SET quantity_amount=quantity_amount+? WHERE id=? AND quantity_amount+?<=required_quantity_amount`
+  ).bind(quantity, itemId, quantity).run();
+  if (!result.meta.changes) throw new HttpError("تعذر تسجيل الكمية؛ أعد تحميل الصفحة", 409);
+  await env.DB.prepare(
+    `INSERT INTO cover_delivery_events(delivery_note_id,delivery_note_item_id,delivery_date,quantity_amount,note,created_by,created_at)
+     VALUES(?,?,?,?,?,?,?)`
+  ).bind(deliveryNoteId, itemId, deliveryDate, quantity, note, user.id, now).run();
+  const pending = await env.DB.prepare(
+    `SELECT COUNT(*) AS count FROM delivery_note_items
+     WHERE delivery_note_id=? AND product_type='غطيان' AND required_quantity_amount IS NOT NULL AND quantity_amount<required_quantity_amount`
+  ).bind(deliveryNoteId).first();
+  const status = Number(pending.count) > 0 ? "incomplete" : "completed";
+  await env.DB.prepare("UPDATE delivery_notes SET fulfillment_status=?,updated_at=? WHERE id=?").bind(status, now, deliveryNoteId).run();
+  await insertAudit(env, request, user, "ADD_COVER_DELIVERY", "delivery_notes", deliveryNoteId, null, { delivery_note_item_id: itemId, delivery_date: deliveryDate, quantity_amount: quantity, remaining: remaining - quantity, fulfillment_status: status });
+  return json({ ok: true, remaining: remaining - quantity, fulfillment_status: status });
 }
 
 async function deliveryNoteWithItems(env, id) {
@@ -1095,7 +1170,8 @@ async function updateDeliveryNote(request, env, user, id) {
   const before = await deliveryNoteWithItems(env, id);
   if (!before) throw new HttpError("Record not found", 404);
   assertRecordNotArchived(before, "delivery_date");
-  const data = await prepareDeliveryNote(env, await readJson(request));
+  if (before.items.some((item) => item.required_quantity_amount != null)) throw new HttpError("استخدم استكمال تسليم الغطيان لهذا الإذن؛ بيانات التتبع محمية من التعديل العام", 409);
+  const data = await prepareDeliveryNote(env, await readJson(request), { trackCovers: false });
   assertAccountingDate(data.delivery_date, "تاريخ إذن التسليم");
   const linkedInvoiceRow = await env.DB.prepare("SELECT id FROM invoices WHERE delivery_note_id = ?").bind(id).first();
   const linkedInvoice = linkedInvoiceRow ? await invoiceWithItems(env, linkedInvoiceRow.id) : null;
@@ -1103,17 +1179,17 @@ async function updateDeliveryNote(request, env, user, id) {
 
   const statements = [env.DB.prepare(
     `UPDATE delivery_notes
-     SET delivery_date=?, customer_id=?, customer_name=?, responsible=?, note=?, updated_at=?
+     SET delivery_date=?, customer_id=?, customer_name=?, responsible=?, note=?, fulfillment_status=?, updated_at=?
      WHERE id=?`
-  ).bind(data.delivery_date, data.customer_id, data.customer_name, data.responsible, data.note, nowIso(), id)];
+  ).bind(data.delivery_date, data.customer_id, data.customer_name, data.responsible, data.note, data.fulfillment_status, nowIso(), id)];
 
   if (linkedInvoice) statements.push(env.DB.prepare("DELETE FROM invoice_items WHERE invoice_id = ?").bind(linkedInvoice.id));
   statements.push(env.DB.prepare("DELETE FROM delivery_note_items WHERE delivery_note_id = ?").bind(id));
   for (const item of data.items) {
     statements.push(env.DB.prepare(
-      `INSERT INTO delivery_note_items(delivery_note_id,line_no,product_type,design_id,design_name,size_id,size_name,quantity_unit,quantity_amount,note,supply_order_id)
-       VALUES(?,?,?,?,?,?,?,?,?,?,?)`
-    ).bind(id, item.line_no, item.product_type, item.design_id, item.design_name, item.size_id, item.size_name, item.quantity_unit, item.quantity_amount, item.note, null));
+      `INSERT INTO delivery_note_items(delivery_note_id,line_no,product_type,design_id,design_name,size_id,size_name,quantity_unit,quantity_amount,required_quantity_amount,note,supply_order_id)
+       VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`
+    ).bind(id, item.line_no, item.product_type, item.design_id, item.design_name, item.size_id, item.size_name, item.quantity_unit, item.quantity_amount, item.required_quantity_amount, item.note, null));
   }
 
   let requiresInvoiceReview = false;
@@ -1195,8 +1271,11 @@ async function deleteDeliveryNote(env, user, id) {
   const before = await deliveryNoteWithItems(env, id);
   if (!before) throw new HttpError("Record not found", 404);
   assertRecordNotArchived(before, "delivery_date");
-  await env.DB.prepare("DELETE FROM delivery_note_items WHERE delivery_note_id = ?").bind(id).run();
-  await env.DB.prepare("DELETE FROM delivery_notes WHERE id = ?").bind(id).run();
+  await env.DB.batch([
+    env.DB.prepare("DELETE FROM cover_delivery_events WHERE delivery_note_id = ?").bind(id),
+    env.DB.prepare("DELETE FROM delivery_note_items WHERE delivery_note_id = ?").bind(id),
+    env.DB.prepare("DELETE FROM delivery_notes WHERE id = ?").bind(id),
+  ]);
   await insertAudit(env, null, user, "DELETE", "delivery_notes", id, before, null);
   return json({ ok: true });
 }

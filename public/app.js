@@ -18,6 +18,7 @@ const state = {
   invoiceDraft: null,
   customerStatement: null,
   deliveryDraft: { index: 0, items: [] },
+  deliveryStatusFilter: "incomplete",
   audit: [],
   users: [],
   expenseReport: null,
@@ -44,7 +45,7 @@ function setPageMode(sectionOrId, mode = "entry") {
   const entryButton = qs('[data-page-mode="entry"]', section);
   const selected = mode === "entry" && entryButton && !entryButton.classList.contains("hidden") ? "entry" : "display";
   section.dataset.pageView = selected;
-  qsa(".page-action-tab", section).forEach((button) => {
+  qsa(".page-action-tab[data-page-mode]", section).forEach((button) => {
     const active = button.dataset.pageMode === selected;
     button.classList.toggle("active", active);
     button.setAttribute("aria-selected", active ? "true" : "false");
@@ -537,6 +538,7 @@ function blankDeliveryItem() {
     size_id: "",
     quantity_unit: "كيلو",
     quantity_amount: "",
+    required_quantity_amount: "",
     note: "",
   };
 }
@@ -562,8 +564,13 @@ function toggleDeliveryProductType() {
   if (!form) return;
   const isCovers = form.product_type.value === "غطيان";
   qs("#deliveryDesignWrap").classList.toggle("hidden", isCovers);
+  qs("#deliveryRequiredQuantityWrap").classList.toggle("hidden", !isCovers);
+  qs("#deliveryQuantityLegend").textContent = isCovers ? "الكمية المسلمة الآن" : "العدد";
   form.design_id.required = !isCovers;
+  form.required_quantity_amount.required = isCovers;
+  form.quantity_amount.min = isCovers ? "0" : "0.01";
   if (isCovers) form.design_id.value = "";
+  else form.required_quantity_amount.value = "";
 }
 
 function deliveryCurrentItem() {
@@ -582,6 +589,7 @@ function saveVisibleDeliveryItem() {
     size_id: form.size_id.value,
     quantity_unit: form.quantity_unit.value,
     quantity_amount: form.quantity_amount.value,
+    required_quantity_amount: isCovers ? form.required_quantity_amount.value : "",
     note: form.item_note.value.trim(),
   };
 }
@@ -596,6 +604,7 @@ function showDeliveryItem(index) {
   fillExistingLookupSelect(form.size_id, state.productSizes, "اختر المقاس", item.size_id || "");
   form.quantity_unit.value = item.quantity_unit || "كيلو";
   form.quantity_amount.value = item.quantity_amount || "";
+  form.required_quantity_amount.value = item.required_quantity_amount || "";
   form.item_note.value = item.note || "";
   toggleDeliveryProductType();
   qs("#deliveryItemCounter").textContent = `الصنف ${state.deliveryDraft.index + 1} من ${state.deliveryDraft.items.length}`;
@@ -609,13 +618,18 @@ function renderDeliveryDraftRows() {
   body.innerHTML = state.deliveryDraft.items.map((item, index) => {
     const design = state.designs.find((row) => String(row.id) === String(item.design_id));
     const size = state.productSizes.find((row) => String(row.id) === String(item.size_id));
+    const required = Number(item.required_quantity_amount || 0);
+    const delivered = Number(item.quantity_amount || 0);
+    const quantityText = item.product_type === "غطيان" && required > 0
+      ? `${money(delivered)} من ${money(required)} ${item.quantity_unit || ""} — متبقي ${money(Math.max(0, required - delivered))}`
+      : item.quantity_amount ? `${money(item.quantity_amount)} ${item.quantity_unit || ""}` : "-";
     return `
       <tr class="${index === state.deliveryDraft.index ? "selected-row" : ""}">
         <td data-label="#">${index + 1}</td>
         <td data-label="الصنف">${item.product_type || "-"}</td>
         <td data-label="التصميم">${design?.name || "-"}</td>
         <td data-label="المقاس">${size?.name || "-"}</td>
-        <td data-label="العدد">${item.quantity_amount ? `${money(item.quantity_amount)} ${item.quantity_unit || ""}` : "-"}</td>
+        <td data-label="العدد">${quantityText}</td>
         <td data-label="ملاحظة">${item.note || "-"}</td>
       </tr>
     `;
@@ -1135,25 +1149,31 @@ function renderDeliveryNotes() {
   if (!body) return;
   const customerId = qs("#deliveryNoteCustomerFilter")?.value;
   const customerName = state.customers.find((item) => String(item.id) === String(customerId))?.name;
-  const items = state.deliveryNotes.filter((item) => !customerId || String(item.customer_id) === String(customerId) || normalizeFilterText(item.customer_name) === normalizeFilterText(customerName));
+  const items = state.deliveryNotes.filter((item) => {
+    const customerMatches = !customerId || String(item.customer_id) === String(customerId) || normalizeFilterText(item.customer_name) === normalizeFilterText(customerName);
+    const statusMatches = state.deliveryStatusFilter === "all" || (item.fulfillment_status || "completed") === state.deliveryStatusFilter;
+    return customerMatches && statusMatches;
+  });
   body.innerHTML = items.map((item) => `
     <tr>
       <td data-label="رقم">${item.id}</td>
       <td data-label="التاريخ">${item.delivery_date || "-"} ${archiveBadge(item.delivery_date)}</td>
       <td data-label="العميل">${item.customer_name || "-"} ${item.transaction_type === "gift" ? `<span class="gift-badge">هدية</span>` : ""}</td>
       <td data-label="المسؤول">${item.responsible || item.created_by_name || "-"}</td>
+      <td data-label="الحالة"><span class="${item.fulfillment_status === "incomplete" ? "review-badge" : "archive-badge"}">${item.fulfillment_status === "incomplete" ? "غير مكتمل" : "مكتمل"}</span></td>
+      <td data-label="الغطيان">${(item.items || []).filter((row) => row.product_type === "غطيان" && row.required_quantity_amount != null).map((row) => `${escapeHtml(row.size_name || "غطاء")}: ${money(row.quantity_amount)} / ${money(row.required_quantity_amount)} — متبقي ${money(Math.max(0, Number(row.required_quantity_amount) - Number(row.quantity_amount || 0)))}`).join("<br>") || "-"}</td>
       <td data-label="عدد الأصناف">${money(item.item_count)}</td>
-      <td data-label="إجمالي العدد">${money(item.total_quantity)}</td>
       <td data-label="ملاحظة عامة">${escapeHtml(item.note || "-")}</td>
       <td data-label="المستخدم">${item.created_by_name || "-"}</td>
       <td class="actions">
-        ${isAdmin() && !isArchivedDate(item.delivery_date) ? `<button type="button" data-edit-delivery-note="${item.id}" title="تعديل">✎</button>` : ""}
+        ${item.fulfillment_status === "incomplete" && (isAdmin() || isCollector()) ? `<button type="button" data-add-cover-delivery="${item.id}">استكمال الغطيان</button>` : ""}
+        ${isAdmin() && !isArchivedDate(item.delivery_date) && !(item.items || []).some((row) => row.required_quantity_amount != null) ? `<button type="button" data-edit-delivery-note="${item.id}" title="تعديل">✎</button>` : ""}
         <button type="button" data-xlsx-delivery-note="${item.id}" title="Excel">Excel</button>
         <button type="button" data-pdf-delivery-note="${item.id}" title="PDF">PDF</button>
         ${isAdmin() && !isArchivedDate(item.delivery_date) ? `<button class="danger" type="button" data-delete-delivery-note="${item.id}" title="حذف">×</button>` : isAdmin() ? `<span class="muted">للعرض فقط</span>` : ""}
       </td>
     </tr>
-  `).join("") || `<tr><td colspan="9" class="muted">لا توجد أذونات تسليم مسجلة</td></tr>`;
+  `).join("") || `<tr><td colspan="10" class="muted">لا توجد أذونات تسليم في هذا القسم</td></tr>`;
 }
 
 function renderInvoices() {
@@ -1358,7 +1378,11 @@ function printDeliveryNote(id) {
   if (!note) return;
   printDocument(`إذن تسليم #${note.id}`, [
     { type: "meta", rows: [["التاريخ", note.delivery_date || "-"], ["العميل", note.customer_name || "-"], ["المسؤول", note.responsible || note.created_by_name || "-"], ["ملاحظة عامة", note.note || "-"]] },
-    { type: "table", title: "الأصناف", headers: ["#", "الصنف", "التصميم", "المقاس", "العدد", "ملاحظة"], rows: (note.items || []).map((item) => [item.line_no, item.product_type, item.design_name || "-", item.size_name || "-", `${money(item.quantity_amount)} ${item.quantity_unit || ""}`, item.note || "-"]) },
+    { type: "table", title: "الأصناف", headers: ["#", "الصنف", "التصميم", "المقاس", "المسلم / المستحق / المتبقي", "ملاحظة"], rows: (note.items || []).map((item) => {
+      const tracked = item.product_type === "غطيان" && item.required_quantity_amount != null;
+      const quantity = tracked ? `${money(item.quantity_amount)} / ${money(item.required_quantity_amount)} / ${money(Math.max(0, Number(item.required_quantity_amount) - Number(item.quantity_amount || 0)))} ${item.quantity_unit || ""}` : `${money(item.quantity_amount)} ${item.quantity_unit || ""}`;
+      return [item.line_no, item.product_type, item.design_name || "-", item.size_name || "-", quantity, item.note || "-"];
+    }) },
   ], { branded: true });
 }
 
@@ -1905,6 +1929,42 @@ async function saveDeliveryNote(event) {
   await Promise.all([loadDeliveryNotes(), loadAudit()]);
 }
 
+function updateCoverDeliverySummary() {
+  const form = qs("#coverDeliveryForm");
+  const note = state.deliveryNotes.find((row) => String(row.id) === String(form.delivery_note_id.value));
+  const item = note?.items.find((row) => String(row.id) === String(form.delivery_note_item_id.value));
+  if (!item) return;
+  const remaining = Math.max(0, Number(item.required_quantity_amount) - Number(item.quantity_amount || 0));
+  const history = (note.cover_deliveries || []).filter((event) => String(event.delivery_note_item_id) === String(item.id));
+  qs("#coverDeliverySummary").innerHTML = `<div><dt>المستحق</dt><dd>${money(item.required_quantity_amount)}</dd></div><div><dt>المسلم</dt><dd>${money(item.quantity_amount)}</dd></div><div><dt>المتبقي</dt><dd>${money(remaining)}</dd></div>${history.length ? `<div class="wide"><dt>الدفعات السابقة</dt><dd>${history.map((event) => `${event.delivery_date}: ${money(event.quantity_amount)}${event.note ? ` — ${escapeHtml(event.note)}` : ""}`).join("<br>")}</dd></div>` : ""}`;
+  form.quantity_amount.max = remaining;
+}
+
+function openCoverDelivery(noteId) {
+  const note = state.deliveryNotes.find((row) => String(row.id) === String(noteId));
+  if (!note) return;
+  const pendingItems = (note.items || []).filter((item) => item.product_type === "غطيان" && item.required_quantity_amount != null && Number(item.quantity_amount || 0) < Number(item.required_quantity_amount));
+  if (!pendingItems.length) return showToast("لا توجد كمية غطيان متبقية", true);
+  const form = qs("#coverDeliveryForm");
+  form.reset();
+  form.delivery_note_id.value = note.id;
+  form.delivery_note_item_id.innerHTML = pendingItems.map((item) => `<option value="${item.id}">${escapeHtml(item.size_name || "غطاء")} — متبقي ${money(Number(item.required_quantity_amount) - Number(item.quantity_amount || 0))}</option>`).join("");
+  form.delivery_date.value = new Date().toISOString().slice(0, 10);
+  form.delivery_date.min = state.accountingStartDate;
+  updateCoverDeliverySummary();
+  qs("#coverDeliveryModal").classList.remove("hidden");
+}
+
+async function saveCoverDelivery(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const noteId = form.delivery_note_id.value;
+  await api(`/api/delivery-notes/${noteId}/cover-deliveries`, { method: "POST", body: JSON.stringify(formData(form)) });
+  qs("#coverDeliveryModal").classList.add("hidden");
+  showToast("تم تسجيل دفعة الغطيان");
+  await Promise.all([loadDeliveryNotes(), isAdmin() ? loadAudit() : Promise.resolve()]);
+}
+
 function invoicePayload() {
   const form = qs("#invoiceForm");
   const note = selectedDeliveryNote();
@@ -2138,6 +2198,7 @@ function editDeliveryNote(id) {
       size_id: row.size_id || "",
       quantity_unit: row.quantity_unit || "كيلو",
       quantity_amount: row.quantity_amount || "",
+      required_quantity_amount: row.required_quantity_amount || "",
       note: row.note || "",
     })),
   };
@@ -2322,6 +2383,7 @@ function bindEvents() {
   bindFormAction("#customerForm", saveCustomer);
   bindFormAction("#supplyOrderForm", saveSupplyOrder);
   bindFormAction("#deliveryNoteForm", saveDeliveryNote);
+  bindFormAction("#coverDeliveryForm", saveCoverDelivery);
   bindFormAction("#expenseForm", saveExpense);
   bindFormAction("#transferForm", saveTransfer);
   bindFormAction("#userForm", saveUser);
@@ -2330,6 +2392,13 @@ function bindEvents() {
   qs("#cancelTransferEdit").addEventListener("click", resetTransferForm);
   qs("#cancelSupplyOrderEdit").addEventListener("click", resetSupplyOrderForm);
   qs("#cancelDeliveryNoteEdit").addEventListener("click", resetDeliveryNoteForm);
+  qs("#cancelCoverDeliveryBtn").addEventListener("click", () => qs("#coverDeliveryModal").classList.add("hidden"));
+  qs('#coverDeliveryForm select[name="delivery_note_item_id"]').addEventListener("change", updateCoverDeliverySummary);
+  qsa("[data-delivery-status]").forEach((button) => button.addEventListener("click", () => {
+    state.deliveryStatusFilter = button.dataset.deliveryStatus;
+    qsa("[data-delivery-status]").forEach((item) => item.classList.toggle("active", item === button));
+    renderDeliveryNotes();
+  }));
   qs('#invoiceForm select[name="delivery_note_id"]').addEventListener("change", () => {
     const note = selectedDeliveryNote();
     state.invoiceDraft = note ? buildInvoiceDraft(note) : null;
@@ -2447,6 +2516,7 @@ function bindEvents() {
     const supplyOrderDelete = event.target.closest("[data-delete-supply-order]");
     const deliveryNoteEdit = event.target.closest("[data-edit-delivery-note]");
     const deliveryNoteDelete = event.target.closest("[data-delete-delivery-note]");
+    const addCoverDelivery = event.target.closest("[data-add-cover-delivery]");
     const invoiceEdit = event.target.closest("[data-edit-invoice]");
     const invoiceDelete = event.target.closest("[data-delete-invoice]");
     const supplyOrderXlsx = event.target.closest("[data-xlsx-supply-order]");
@@ -2465,6 +2535,7 @@ function bindEvents() {
     if (supplyOrderDelete) removeRecord("supply-orders", supplyOrderDelete.dataset.deleteSupplyOrder).catch((error) => showToast(error.message, true));
     if (deliveryNoteEdit) editDeliveryNote(deliveryNoteEdit.dataset.editDeliveryNote);
     if (deliveryNoteDelete) removeRecord("delivery-notes", deliveryNoteDelete.dataset.deleteDeliveryNote).catch((error) => showToast(error.message, true));
+    if (addCoverDelivery) openCoverDelivery(addCoverDelivery.dataset.addCoverDelivery);
     if (invoiceEdit) editInvoice(invoiceEdit.dataset.editInvoice);
     if (invoiceDelete) removeRecord("invoices", invoiceDelete.dataset.deleteInvoice).catch((error) => showToast(error.message, true));
     if (supplyOrderXlsx) window.location.href = `/api/supply-orders/${supplyOrderXlsx.dataset.xlsxSupplyOrder}.xlsx`;
