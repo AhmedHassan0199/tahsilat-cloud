@@ -1950,6 +1950,7 @@ function openCoverDelivery(noteId) {
   form.reset();
   form.delivery_note_id.value = note.id;
   form.delivery_note_item_id.innerHTML = pendingItems.map((item) => `<option value="${item.id}">${escapeHtml(item.size_name || "غطاء")} — متبقي ${money(Number(item.required_quantity_amount) - Number(item.quantity_amount || 0))}</option>`).join("");
+  refreshSearchableSelect(form.delivery_note_item_id);
   form.delivery_date.value = new Date().toISOString().slice(0, 10);
   form.delivery_date.min = state.accountingStartDate;
   updateCoverDeliverySummary();
