@@ -1091,7 +1091,7 @@ function renderCollections() {
       <td data-label="الشهر">${item.month || "-"}</td>
       <td data-label="المسؤول">${item.responsible}</td>
       <td data-label="العميل">${item.client_name}</td>
-      <td data-label="نوع التحصيل">${item.collection_type || "-"}</td>
+      <td data-label="نوع التحصيل">${item.collection_type || "-"}${item.transaction_type === "direct_cash" ? ` <span class="archive-badge">مترابط</span>` : ""}</td>
       <td data-label="المبلغ">${money(item.amount)}</td>
       <td data-label="الطريقة">${item.payment_method}</td>
       <td class="actions">${adminRecordActions("data-edit-collection", "data-delete-collection", item.id, item.entry_date)}</td>
@@ -1247,7 +1247,7 @@ function renderDeliveryNotes() {
     <tr>
       <td data-label="رقم">${item.id}</td>
       <td data-label="التاريخ">${item.delivery_date || "-"} ${archiveBadge(item.delivery_date)}</td>
-      <td data-label="العميل">${item.customer_name || "-"} ${item.transaction_type === "gift" ? `<span class="gift-badge">هدية</span>` : ""}</td>
+      <td data-label="العميل">${item.customer_name || "-"} ${item.transaction_type === "gift" ? `<span class="gift-badge">هدية</span>` : item.transaction_type === "direct_cash" ? `<span class="archive-badge">بيع نقدي</span>` : ""}</td>
       <td data-label="المسؤول">${item.responsible || item.created_by_name || "-"}</td>
       <td data-label="الحالة"><span class="${item.fulfillment_status === "incomplete" ? "review-badge" : "archive-badge"}">${item.fulfillment_status === "incomplete" ? "غير مكتمل" : "مكتمل"}</span></td>
       <td data-label="الغطيان">${(item.items || []).filter((row) => row.product_type === "غطيان" && row.required_quantity_amount != null).map((row) => `${escapeHtml(row.size_name || "غطاء")}: ${money(row.quantity_amount)} / ${money(row.required_quantity_amount)} — متبقي ${money(Math.max(0, Number(row.required_quantity_amount) - Number(row.quantity_amount || 0)))}`).join("<br>") || "-"}</td>
@@ -1257,10 +1257,10 @@ function renderDeliveryNotes() {
       <td class="actions">
         ${item.fulfillment_status === "incomplete" && (isAdmin() || isCollector()) ? `<button type="button" data-add-cover-delivery="${item.id}">استكمال الغطيان</button>` : ""}
         ${isAdmin() && !isArchivedDate(item.delivery_date) && (item.items || []).some((row) => row.required_quantity_amount != null) ? `<button type="button" data-edit-cover-requirements="${item.id}">تعديل المستحق</button>` : ""}
-        ${isAdmin() && !isArchivedDate(item.delivery_date) && !(item.items || []).some((row) => row.required_quantity_amount != null) ? `<button type="button" data-edit-delivery-note="${item.id}" title="تعديل">✎</button>` : ""}
+        ${isAdmin() && item.transaction_type !== "direct_cash" && !isArchivedDate(item.delivery_date) && !(item.items || []).some((row) => row.required_quantity_amount != null) ? `<button type="button" data-edit-delivery-note="${item.id}" title="تعديل">✎</button>` : ""}
         <button type="button" data-xlsx-delivery-note="${item.id}" title="Excel">Excel</button>
         <button type="button" data-pdf-delivery-note="${item.id}" title="PDF">PDF</button>
-        ${isAdmin() && !isArchivedDate(item.delivery_date) ? `<button class="danger" type="button" data-delete-delivery-note="${item.id}" title="حذف">×</button>` : isAdmin() ? `<span class="muted">للعرض فقط</span>` : ""}
+        ${isAdmin() && item.transaction_type === "direct_cash" ? `<span class="muted">يُدار من التحصيلات</span>` : isAdmin() && !isArchivedDate(item.delivery_date) ? `<button class="danger" type="button" data-delete-delivery-note="${item.id}" title="حذف">×</button>` : isAdmin() ? `<span class="muted">للعرض فقط</span>` : ""}
       </td>
     </tr>
   `).join("") || `<tr><td colspan="10" class="muted">لا توجد أذونات تسليم في هذا القسم</td></tr>`;
@@ -1285,9 +1285,9 @@ function renderInvoices() {
       <td data-label="الرصيد بعدها">${money(item.balance_after_invoice)}${item.transaction_type === "direct_cash" ? `<br><small class="muted">بعد التحصيل الفوري: ${money(item.balance_after_operation)}</small>` : ""}</td>
       <td data-label="المستخدم">${item.created_by_name || "-"}</td>
       <td class="actions">
-        ${isAdmin() && !isArchivedDate(item.invoice_date) ? `<button type="button" data-edit-invoice="${item.id}" title="تعديل">✎</button>` : ""}
+        ${isAdmin() && item.transaction_type !== "direct_cash" && !isArchivedDate(item.invoice_date) ? `<button type="button" data-edit-invoice="${item.id}" title="تعديل">✎</button>` : ""}
         ${item.requires_review ? "" : `<button type="button" data-xlsx-invoice="${item.id}" title="Excel">Excel</button><button type="button" data-pdf-invoice="${item.id}" title="PDF">PDF</button>`}
-        ${isAdmin() && !isArchivedDate(item.invoice_date) ? `<button class="danger" type="button" data-delete-invoice="${item.id}" title="حذف">×</button>` : isAdmin() ? `<span class="muted">للعرض فقط</span>` : ""}
+        ${isAdmin() && item.transaction_type === "direct_cash" ? `<span class="muted">يُدار من التحصيلات</span>` : isAdmin() && !isArchivedDate(item.invoice_date) ? `<button class="danger" type="button" data-delete-invoice="${item.id}" title="حذف">×</button>` : isAdmin() ? `<span class="muted">للعرض فقط</span>` : ""}
       </td>
     </tr>
   `).join("") || `<tr><td colspan="11" class="muted">لا توجد فواتير مسجلة</td></tr>`;
@@ -1805,6 +1805,37 @@ function fillDirectSaleForm() {
   toggleDirectSaleCustomer();
 }
 
+function resetDirectSaleForm() {
+  const form = qs("#directSaleForm");
+  if (!form) return;
+  form.reset();
+  form.elements.id.value = "";
+  qs("#directSaleItems").replaceChildren();
+  qs("#directSaleFormTitle").textContent = "بيع نقدي مباشر بدون أمر توريد";
+  qs("#directSaleSubmitBtn").textContent = "إصدار الفاتورة وتسجيل التحصيل";
+  qs("#cancelDirectSaleEdit").classList.add("hidden");
+  fillDirectSaleForm();
+  applyAccountingDateConstraints();
+}
+
+function populateDirectSaleItems(items) {
+  const container = qs("#directSaleItems");
+  container.replaceChildren();
+  (items || []).forEach((item) => {
+    const card = addDirectSaleItem();
+    qs('[data-field="product_type"]', card).value = item.product_type || "كوبايات - علب";
+    qs('[data-field="design_name"]', card).value = item.design_name || "";
+    qs('[data-field="size_id"]', card).value = item.size_id || "";
+    qs('[data-field="quantity_unit"]', card).value = item.quantity_unit || "كرتونه";
+    qs('[data-field="quantity_amount"]', card).value = item.quantity_amount ?? "";
+    qs('[data-field="unit_price"]', card).value = item.unit_price ?? "";
+    qs('[data-field="note"]', card).value = item.note || "";
+  });
+  if (!(items || []).length) addDirectSaleItem();
+  renumberDirectSaleItems();
+  recalculateDirectSaleTotals();
+}
+
 function fillGiftForm() {
   const form = qs("#giftForm");
   if (!form) return;
@@ -1848,12 +1879,10 @@ async function saveDirectSale(event) {
     note: raw.note,
     items: directSalePayloadItems(),
   };
-  const result = await api("/api/direct-sales", { method: "POST", body: JSON.stringify(payload) });
-  form.reset();
-  applyAccountingDateConstraints();
-  qs("#directSaleItems").replaceChildren();
-  fillDirectSaleForm();
-  showToast(`تم إصدار الفاتورة #${result.invoice_id} وتسجيل التحصيل`);
+  const id = raw.id;
+  const result = await api(id ? `/api/direct-sales/${id}` : "/api/direct-sales", { method: id ? "PUT" : "POST", body: JSON.stringify(payload) });
+  resetDirectSaleForm();
+  showToast(id ? `تم تحديث البيع النقدي والفاتورة #${result.invoice_id} وإذن التسليم` : `تم إصدار الفاتورة #${result.invoice_id} وتسجيل التحصيل`);
   await Promise.all([loadBootstrap(), loadCollections(), loadDeliveryNotes(), loadInvoices()]);
   if (isAdmin()) await Promise.all([loadDashboard(), loadCustomers(), loadAudit()]);
 }
@@ -2272,6 +2301,10 @@ async function downloadBackup() {
 function editCollection(id) {
   const item = state.collections.find((row) => String(row.id) === String(id));
   if (!item) return;
+  if (item.transaction_type === "direct_cash") {
+    editDirectSale(id).catch((error) => showToast(error.message, true));
+    return;
+  }
   setPageMode("collections", "entry");
   setCollectionMode("normal");
   const form = qs("#collectionForm");
@@ -2295,6 +2328,29 @@ function editCollection(id) {
   toggleCollectionCustody();
   form.note.value = item.note || "";
   qs("#collectionFormTitle").textContent = `تعديل تحصيل #${item.id}`;
+  form.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+async function editDirectSale(id) {
+  if (!isAdmin()) return;
+  const item = await api(`/api/direct-sales/${id}`);
+  setPageMode("collections", "entry");
+  setCollectionMode("direct");
+  const form = qs("#directSaleForm");
+  form.elements.id.value = item.id;
+  form.entry_date.value = item.entry_date || "";
+  fillSelect(form.responsible, state.responsibles, item.responsible || "");
+  fillCustomerSelect(form.customer_id, item.customer_id || "");
+  form.manual_customer_name.value = item.customer_id ? "" : (item.manual_customer_name || "");
+  form.save_customer.checked = Boolean(item.save_customer);
+  fillSelect(form.payment_method, state.paymentMethods, item.payment_method || "");
+  form.delivery_charge.value = item.delivery_charge || 0;
+  form.note.value = item.note || "";
+  toggleDirectSaleCustomer();
+  populateDirectSaleItems(item.items);
+  qs("#directSaleFormTitle").textContent = `تعديل بيع نقدي مباشر #${item.id}`;
+  qs("#directSaleSubmitBtn").textContent = "حفظ التعديلات على العملية كاملة";
+  qs("#cancelDirectSaleEdit").classList.remove("hidden");
   form.scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
@@ -2442,13 +2498,20 @@ function editInvoice(id) {
 async function removeRecord(kind, id) {
   const labels = { collections: "التحصيل", expenses: "المصروف", transfers: "التوسيط", "supply-orders": "أمر التوريد", "delivery-notes": "إذن التسليم", invoices: "الفاتورة" };
   const label = labels[kind] || "السجل";
-  if (!confirm(`حذف ${label} رقم ${id}؟`)) return;
-  await api(`/api/${kind}/${id}`, { method: "DELETE" });
+  const collection = kind === "collections" ? state.collections.find((item) => String(item.id) === String(id)) : null;
+  const directSale = collection?.transaction_type === "direct_cash";
+  const question = directSale
+    ? `حذف البيع النقدي المباشر رقم ${id}؟ سيتم حذف التحصيل والفاتورة وإذن التسليم وكل البنود المرتبطة.`
+    : `حذف ${label} رقم ${id}؟`;
+  if (!confirm(question)) return;
+  await api(directSale ? `/api/direct-sales/${id}` : `/api/${kind}/${id}`, { method: "DELETE" });
   showToast("تم الحذف");
   await Promise.all([
     loadDashboard(),
     kind === "collections" ? loadCollections() : kind === "expenses" ? loadExpenses() : kind === "transfers" ? loadTransfers() : kind === "supply-orders" ? loadSupplyOrders() : kind === "delivery-notes" ? loadDeliveryNotes() : loadInvoices(),
     kind === "collections" ? loadCustomers() : Promise.resolve(),
+    directSale ? loadDeliveryNotes() : Promise.resolve(),
+    directSale ? loadInvoices() : Promise.resolve(),
     loadAudit(),
   ]);
 }
@@ -2592,6 +2655,7 @@ function bindEvents() {
   bindFormAction("#transferForm", saveTransfer);
   bindFormAction("#userForm", saveUser);
   qs("#cancelCollectionEdit").addEventListener("click", resetCollectionForm);
+  qs("#cancelDirectSaleEdit").addEventListener("click", resetDirectSaleForm);
   qs("#cancelExpenseEdit").addEventListener("click", resetExpenseForm);
   qs("#cancelTransferEdit").addEventListener("click", resetTransferForm);
   qs("#cancelSupplyOrderEdit").addEventListener("click", resetSupplyOrderForm);

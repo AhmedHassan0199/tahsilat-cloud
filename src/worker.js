@@ -45,6 +45,12 @@ async function handleApi(request, env, url) {
   if (url.pathname === "/api/collections" && method === "GET") return listCollections(env, url);
   if (url.pathname === "/api/collections" && method === "POST") return createCollection(request, env, user);
   if (url.pathname === "/api/direct-sales" && method === "POST") return createDirectSale(request, env, user);
+  if (/^\/api\/direct-sales\/\d+$/.test(url.pathname)) {
+    const id = idFromPath(url.pathname);
+    if (method === "GET") return directSaleDetails(env, user, id);
+    if (method === "PUT") return updateDirectSale(request, env, user, id);
+    if (method === "DELETE") return deleteDirectSale(request, env, user, id);
+  }
   if (url.pathname === "/api/gifts" && method === "POST") return createGift(request, env, user);
   if (url.pathname.startsWith("/api/collections/")) {
     const id = idFromPath(url.pathname);
@@ -1330,6 +1336,7 @@ async function updateDeliveryNote(request, env, user, id) {
   assertCanWrite(user);
   const before = await deliveryNoteWithItems(env, id);
   if (!before) throw new HttpError("Record not found", 404);
+  if (before.transaction_type === "direct_cash") throw new HttpError("يتم تعديل البيع النقدي المباشر من سجل التحصيلات", 409);
   assertRecordNotArchived(before, "delivery_date");
   if (before.items.some((item) => item.required_quantity_amount != null)) throw new HttpError("استخدم استكمال تسليم الغطيان لهذا الإذن؛ بيانات التتبع محمية من التعديل العام", 409);
   const payload = await readJson(request);
@@ -1436,6 +1443,7 @@ async function deleteDeliveryNote(env, user, id) {
   assertCanWrite(user);
   const before = await deliveryNoteWithItems(env, id);
   if (!before) throw new HttpError("Record not found", 404);
+  if (before.transaction_type === "direct_cash") throw new HttpError("يتم حذف البيع النقدي المباشر من سجل التحصيلات", 409);
   assertRecordNotArchived(before, "delivery_date");
   await env.DB.batch([
     env.DB.prepare("DELETE FROM cover_delivery_events WHERE delivery_note_id = ?").bind(id),
@@ -1759,6 +1767,7 @@ async function updateInvoice(request, env, user, id) {
   assertCanWrite(user);
   const before = await invoiceWithItems(env, id);
   if (!before) throw new HttpError("Record not found", 404);
+  if (before.transaction_type === "direct_cash") throw new HttpError("يتم تعديل البيع النقدي المباشر من سجل التحصيلات", 409);
   assertRecordNotArchived(before, "invoice_date");
   const data = await prepareInvoice(env, await readJson(request), id);
   assertAccountingDate(data.invoice_date, "تاريخ الفاتورة");
@@ -1777,6 +1786,7 @@ async function deleteInvoice(env, user, id) {
   assertCanWrite(user);
   const before = await invoiceWithItems(env, id);
   if (!before) throw new HttpError("Record not found", 404);
+  if (before.transaction_type === "direct_cash") throw new HttpError("يتم حذف البيع النقدي المباشر من سجل التحصيلات", 409);
   assertRecordNotArchived(before, "invoice_date");
   await env.DB.prepare("DELETE FROM invoice_items WHERE invoice_id = ?").bind(id).run();
   await env.DB.prepare("DELETE FROM invoices WHERE id = ?").bind(id).run();
@@ -1869,6 +1879,157 @@ async function createDirectSale(request, env, user) {
   return json(created);
 }
 
+async function directSaleSnapshot(env, id) {
+  const collection = await env.DB.prepare("SELECT * FROM collections WHERE id=? AND transaction_type='direct_cash'").bind(id).first();
+  if (!collection) return null;
+  const invoice = collection.invoice_id ? await invoiceWithItems(env, collection.invoice_id) : null;
+  const deliveryNote = collection.delivery_note_id ? await deliveryNoteWithItems(env, collection.delivery_note_id) : null;
+  const customer = collection.customer_id ? await env.DB.prepare("SELECT id,name,normalized_name,active,is_transient FROM customers WHERE id=?").bind(collection.customer_id).first() : null;
+  return { collection, invoice, delivery_note: deliveryNote, customer };
+}
+
+async function directSaleDetails(env, user, id) {
+  assertCanWrite(user);
+  const snapshot = await directSaleSnapshot(env, id);
+  if (!snapshot?.invoice || !snapshot?.delivery_note) throw new HttpError("عملية البيع النقدي غير مكتملة أو غير موجودة", 404);
+  const noteItems = new Map(snapshot.delivery_note.items.map((item) => [String(item.id), item]));
+  const editableItems = snapshot.invoice.items.length
+    ? snapshot.invoice.items.map((item) => ({
+      product_type: item.product_type,
+      design_name: item.design_name,
+      size_id: item.size_id,
+      quantity_unit: item.quantity_unit,
+      quantity_amount: item.quantity_amount,
+      unit_price: item.unit_price,
+      note: noteItems.get(String(item.delivery_note_item_id))?.note || null,
+    }))
+    : snapshot.delivery_note.items.map((item) => ({
+      product_type: item.product_type,
+      design_name: item.design_name,
+      size_id: item.size_id,
+      quantity_unit: item.quantity_unit,
+      quantity_amount: item.quantity_amount,
+      unit_price: snapshot.delivery_note.items.length === 1 && Number(item.quantity_amount) > 0
+        ? Number(snapshot.invoice.subtotal || 0) / Number(item.quantity_amount)
+        : 0,
+      note: item.note || null,
+    }));
+  return json({
+    id: snapshot.collection.id,
+    entry_date: snapshot.collection.entry_date,
+    responsible: snapshot.collection.responsible,
+    customer_id: snapshot.customer?.active && !snapshot.customer?.is_transient ? snapshot.customer.id : null,
+    manual_customer_name: snapshot.collection.client_name,
+    save_customer: snapshot.customer?.active && !snapshot.customer?.is_transient ? 1 : 0,
+    customer_is_transient: snapshot.customer?.is_transient ? 1 : 0,
+    payment_method: snapshot.collection.payment_method,
+    delivery_charge: snapshot.invoice.delivery_charge,
+    note: snapshot.collection.note,
+    invoice_id: snapshot.invoice.id,
+    delivery_note_id: snapshot.delivery_note.id,
+    items: editableItems,
+  });
+}
+
+async function updateDirectSale(request, env, user, id) {
+  assertCanWrite(user);
+  const before = await directSaleSnapshot(env, id);
+  if (!before?.invoice || !before?.delivery_note) throw new HttpError("عملية البيع النقدي غير مكتملة أو غير موجودة", 404);
+  assertRecordNotArchived(before.collection, "entry_date");
+  const payload = await readJson(request);
+  const entryDate = parseDateValue(payload.entry_date) || new Date().toISOString().slice(0, 10);
+  assertAccountingDate(entryDate, "تاريخ البيع النقدي");
+  const responsible = selectedResponsible(payload.responsible);
+  const paymentMethod = String(payload.payment_method || "").trim();
+  const deliveryCharge = Number(payload.delivery_charge || 0);
+  const note = String(payload.note || "").trim() || null;
+  if (!paymentMethod) throw new HttpError("طريقة التحصيل مطلوبة", 400);
+  if (!Number.isFinite(deliveryCharge) || deliveryCharge < 0) throw new HttpError("مصاريف النقل غير صحيحة", 400);
+
+  const rawItems = Array.isArray(payload.items) ? payload.items : [];
+  if (!rawItems.length) throw new HttpError("يجب إضافة صنف واحد على الأقل", 400);
+  if (rawItems.length > 50) throw new HttpError("الحد الأقصى هو 50 صنفًا في الفاتورة الواحدة", 400);
+  const items = [];
+  for (let index = 0; index < rawItems.length; index += 1) {
+    const raw = rawItems[index];
+    const productType = ["كوبايات - علب", "غطيان"].includes(raw.product_type) ? raw.product_type : "";
+    const designName = String(raw.design_name || "").trim().slice(0, 200);
+    const sizeId = Number(raw.size_id || 0) || null;
+    const quantityUnit = ["كيلو", "كرتونه"].includes(raw.quantity_unit) ? raw.quantity_unit : "كرتونه";
+    const quantity = Number(raw.quantity_amount || 0);
+    const unitPrice = Number(raw.unit_price || 0);
+    if (!productType || !designName || !sizeId || quantity <= 0 || unitPrice < 0 || !Number.isFinite(quantity) || !Number.isFinite(unitPrice)) throw new HttpError(`بيانات الصنف ${index + 1} غير صحيحة`, 400);
+    const size = await env.DB.prepare("SELECT id,name FROM product_sizes WHERE id=? AND active=1").bind(sizeId).first();
+    if (!size) throw new HttpError(`المقاس غير صحيح في الصنف ${index + 1}`, 400);
+    items.push({ line_no: index + 1, product_type: productType, design_id: null, design_name: designName, size_id: size.id, size_name: size.name, quantity_unit: quantityUnit, quantity_amount: quantity, unit_price: unitPrice, line_total: quantity * unitPrice, note: String(raw.note || "").trim() || null });
+  }
+  const subtotal = items.reduce((sum, item) => sum + item.line_total, 0);
+  const total = subtotal + deliveryCharge;
+  if (!(total > 0)) throw new HttpError("إجمالي البيع يجب أن يكون أكبر من صفر", 400);
+
+  const statements = [];
+  let customerId = Number(payload.customer_id || 0) || null;
+  let customerName = "";
+  if (customerId) {
+    const customer = await env.DB.prepare("SELECT id,name FROM customers WHERE id=? AND active=1").bind(customerId).first();
+    if (!customer) throw new HttpError("العميل غير صحيح", 400);
+    customerName = customer.name;
+  } else {
+    customerName = normalizeCustomerName(payload.manual_customer_name);
+    if (!customerName) throw new HttpError("اسم العميل مطلوب", 400);
+    const saveCustomer = truthy(payload.save_customer);
+    const normalKey = normalizedCustomerKey(customerName);
+    const existing = saveCustomer ? await env.DB.prepare("SELECT id,name FROM customers WHERE normalized_name=?").bind(normalKey).first() : null;
+    if (existing) {
+      customerId = existing.id;
+      customerName = existing.name;
+    } else if (before.customer?.is_transient) {
+      customerId = before.customer.id;
+      const key = saveCustomer ? normalKey : before.customer.normalized_name;
+      statements.push(env.DB.prepare("UPDATE customers SET name=?,normalized_name=?,active=?,is_transient=?,updated_at=? WHERE id=?").bind(customerName, key, saveCustomer ? 1 : 0, saveCustomer ? 0 : 1, nowIso(), customerId));
+    } else {
+      const key = saveCustomer ? normalKey : `${normalKey}#عابر#${crypto.randomUUID()}`;
+      const created = await env.DB.prepare("INSERT INTO customers(name,normalized_name,active,is_transient,created_at,updated_at) VALUES(?,?,?,?,?,?)").bind(customerName, key, saveCustomer ? 1 : 0, saveCustomer ? 0 : 1, nowIso(), nowIso()).run();
+      customerId = created.meta.last_row_id;
+    }
+  }
+
+  const now = nowIso();
+  statements.push(env.DB.prepare("DELETE FROM invoice_items WHERE invoice_id=?").bind(before.invoice.id));
+  statements.push(env.DB.prepare("DELETE FROM cover_delivery_events WHERE delivery_note_id=?").bind(before.delivery_note.id));
+  statements.push(env.DB.prepare("DELETE FROM delivery_note_items WHERE delivery_note_id=?").bind(before.delivery_note.id));
+  statements.push(env.DB.prepare("UPDATE delivery_notes SET delivery_date=?,customer_id=?,customer_name=?,responsible=?,note=?,fulfillment_status='completed',updated_at=? WHERE id=?").bind(entryDate, customerId, customerName, responsible, note, now, before.delivery_note.id));
+  for (const item of items) statements.push(env.DB.prepare(`INSERT INTO delivery_note_items(delivery_note_id,line_no,product_type,design_id,design_name,size_id,size_name,quantity_unit,quantity_amount,note)
+    VALUES(?,?,?,?,?,?,?,?,?,?)`).bind(before.delivery_note.id, item.line_no, item.product_type, item.design_id, item.design_name, item.size_id, item.size_name, item.quantity_unit, item.quantity_amount, item.note));
+  statements.push(env.DB.prepare("UPDATE invoices SET invoice_date=?,delivery_note_id=?,customer_id=?,customer_name=?,responsible=?,subtotal=?,serial_total=0,delivery_charge=?,total=?,note=?,payment_status='paid',updated_at=? WHERE id=?").bind(entryDate, before.delivery_note.id, customerId, customerName, responsible, subtotal, deliveryCharge, total, note, now, before.invoice.id));
+  for (const item of items) statements.push(env.DB.prepare(`INSERT INTO invoice_items(invoice_id,delivery_note_item_id,line_no,product_type,design_id,design_name,size_id,size_name,quantity_unit,quantity_amount,supply_order_id,price_type,unit_price,line_total,serial_color_price,serial_colors_count,serial_total)
+    VALUES(?,(SELECT id FROM delivery_note_items WHERE delivery_note_id=? AND line_no=?),?,?,?,?,?,?,?,?,NULL,'manual',?,?,0,0,0)`).bind(before.invoice.id, before.delivery_note.id, item.line_no, item.line_no, item.product_type, item.design_id, item.design_name, item.size_id, item.size_name, item.quantity_unit, item.quantity_amount, item.unit_price, item.line_total));
+  statements.push(env.DB.prepare("UPDATE collections SET entry_date=?,month=?,responsible=?,customer_id=?,client_name=?,collection_type='بيع نقدي مباشر',collection_type_other=NULL,amount=?,payment_method=?,note=?,updated_at=? WHERE id=?").bind(entryDate, monthFromDate(entryDate), responsible, customerId, customerName, total, paymentMethod, note, now, id));
+  await env.DB.batch(statements);
+  const after = await directSaleSnapshot(env, id);
+  await insertAudit(env, request, user, "UPDATE", "direct_sales", id, before, after);
+  return json({ ok: true, id, invoice_id: before.invoice.id, delivery_note_id: before.delivery_note.id, amount: total });
+}
+
+async function deleteDirectSale(request, env, user, id) {
+  assertCanWrite(user);
+  const before = await directSaleSnapshot(env, id);
+  if (!before?.invoice || !before?.delivery_note) throw new HttpError("عملية البيع النقدي غير مكتملة أو غير موجودة", 404);
+  assertRecordNotArchived(before.collection, "entry_date");
+  await env.DB.batch([
+    env.DB.prepare("UPDATE invoices SET collection_id=NULL WHERE id=?").bind(before.invoice.id),
+    env.DB.prepare("UPDATE collections SET invoice_id=NULL,delivery_note_id=NULL WHERE id=?").bind(id),
+    env.DB.prepare("DELETE FROM invoice_items WHERE invoice_id=?").bind(before.invoice.id),
+    env.DB.prepare("DELETE FROM invoices WHERE id=?").bind(before.invoice.id),
+    env.DB.prepare("DELETE FROM cover_delivery_events WHERE delivery_note_id=?").bind(before.delivery_note.id),
+    env.DB.prepare("DELETE FROM delivery_note_items WHERE delivery_note_id=?").bind(before.delivery_note.id),
+    env.DB.prepare("DELETE FROM delivery_notes WHERE id=?").bind(before.delivery_note.id),
+    env.DB.prepare("DELETE FROM collections WHERE id=?").bind(id),
+  ]);
+  await insertAudit(env, request, user, "DELETE", "direct_sales", id, before, null);
+  return json({ ok: true, invoice_id: before.invoice.id, delivery_note_id: before.delivery_note.id });
+}
+
 async function createGift(request, env, user) {
   if (!["admin", "collector"].includes(effectiveRole(user))) throw new HttpError("ليس لديك صلاحية لتسجيل الهدية", 403);
   const payload = await readJson(request);
@@ -1953,6 +2114,7 @@ async function updateCollection(request, env, user, id) {
   assertCanWrite(user);
   const before = await env.DB.prepare("SELECT * FROM collections WHERE id = ?").bind(id).first();
   if (!before) throw new HttpError("Record not found", 404);
+  if (before.transaction_type === "direct_cash") throw new HttpError("استخدم نموذج البيع النقدي المباشر لتعديل هذه العملية", 409);
   assertRecordNotArchived(before, "entry_date");
   const data = await applyCollectionCustody(env, await applyCustomer(env, collectionData(await readJson(request))));
   validateCollection(data);
@@ -2006,6 +2168,7 @@ async function deleteRecord(env, user, tableName, entity, id) {
   assertCanWrite(user);
   const before = await env.DB.prepare(`SELECT * FROM ${tableName} WHERE id = ?`).bind(id).first();
   if (!before) throw new HttpError("Record not found", 404);
+  if (tableName === "collections" && before.transaction_type === "direct_cash") throw new HttpError("استخدم حذف البيع النقدي المباشر لحذف العملية المترابطة", 409);
   if (tableName === "collections") assertRecordNotArchived(before, "entry_date");
   if (tableName === "supply_orders" && (!before.order_date || before.order_date < ACCOUNTING_START_DATE)) {
     throw new HttpError("أمر التوريد القديم يظل متاحًا للاستخدام والتعديل ولا يمكن حذفه", 409);

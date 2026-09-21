@@ -155,7 +155,8 @@
             </div>
           </form>
           <form id="directSaleForm" class="form-panel collection-mode-panel hidden" data-page-pane="entry" data-collection-panel="direct">
-            <h2>بيع نقدي مباشر بدون أمر توريد</h2>
+            <h2 id="directSaleFormTitle">بيع نقدي مباشر بدون أمر توريد</h2>
+            <input type="hidden" name="id">
             <p class="muted section-note">ينشئ إذن تسليم وفاتورة مدفوعة وتحصيلًا واحدًا مترابطًا.</p>
             <label>التاريخ<input name="entry_date" type="date"></label>
             <label>المسؤول<select name="responsible" required></select></label>
@@ -170,7 +171,7 @@
             <label>مصاريف النقل<input name="delivery_charge" type="number" min="0" step="0.01" value="0"></label>
             <label>طريقة التحصيل<select name="payment_method" required></select></label>
             <label class="wide">ملاحظة<textarea name="note" rows="2"></textarea></label>
-            <div class="form-actions"><button type="submit">إصدار الفاتورة وتسجيل التحصيل</button></div>
+            <div class="form-actions"><button id="directSaleSubmitBtn" type="submit">إصدار الفاتورة وتسجيل التحصيل</button><button id="cancelDirectSaleEdit" class="secondary hidden" type="button">إلغاء التعديل</button></div>
           </form>
           <form id="giftForm" class="form-panel collection-mode-panel hidden" data-page-pane="entry" data-collection-panel="gift">
             <h2>هدية / بضاعة مجانية</h2>
