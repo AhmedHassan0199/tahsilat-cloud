@@ -17,6 +17,7 @@ const state = {
   invoices: [],
   returnableInvoices: [],
   salesReturns: [],
+  customerDiscounts: [],
   receivables: null,
   receivablesStatus: "debt",
   invoiceDraft: null,
@@ -286,9 +287,9 @@ function applyRolePermissions() {
   const planner = isPlanner();
   const invoiceIssuer = isInvoiceIssuer();
   qsa(".tab").forEach((tab) => {
-    const allowedForCollector = ["collections", "supplyOrders", "deliveryNotes", "invoices", "customerStatement", "receivables"].includes(tab.dataset.tab);
+    const allowedForCollector = ["collections", "supplyOrders", "deliveryNotes", "invoices", "customerDiscounts", "customerStatement", "receivables"].includes(tab.dataset.tab);
     const allowedForPlanner = tab.dataset.tab === "supplyOrders";
-    const allowedForInvoiceIssuer = ["supplyOrders", "deliveryNotes", "invoices", "salesReturns", "customerStatement", "receivables", "openingBalances"].includes(tab.dataset.tab);
+    const allowedForInvoiceIssuer = ["supplyOrders", "deliveryNotes", "invoices", "salesReturns", "customerDiscounts", "customerStatement", "receivables", "openingBalances"].includes(tab.dataset.tab);
     tab.classList.toggle("hidden", (collector && !allowedForCollector) || (planner && !allowedForPlanner) || (invoiceIssuer && !allowedForInvoiceIssuer));
   });
   qsa(".admin-only").forEach((item) => item.classList.toggle("hidden", !isAdmin()));
@@ -297,7 +298,7 @@ function applyRolePermissions() {
   qs("#collectionModeTabs")?.classList.toggle("hidden", !(isAdmin() || collector));
   qs("#salesReturnAdminRefunds")?.classList.toggle("hidden", !isAdmin());
 
-  const forms = ["collectionForm", "directSaleForm", "giftForm", "customerForm", "supplyOrderForm", "deliveryNoteForm", "invoiceForm", "salesReturnForm", "openingBalanceForm", "expenseForm", "methodForm", "transferForm", "userForm"];
+  const forms = ["collectionForm", "directSaleForm", "giftForm", "customerForm", "supplyOrderForm", "deliveryNoteForm", "invoiceForm", "salesReturnForm", "customerDiscountForm", "openingBalanceForm", "expenseForm", "methodForm", "transferForm", "userForm"];
   forms.forEach((id) => {
     const allowed = isAdmin() || (collector && ["collectionForm", "directSaleForm", "giftForm", "supplyOrderForm", "deliveryNoteForm"].includes(id)) || (invoiceIssuer && ["invoiceForm", "salesReturnForm", "openingBalanceForm"].includes(id));
     qs(`#${id}`)?.classList.toggle("hidden", !allowed);
@@ -355,7 +356,7 @@ function fillCustomerSelect(select, current = "") {
   select.innerHTML = "";
   const placeholder = document.createElement("option");
   placeholder.value = "";
-  placeholder.textContent = ["collectionReportCustomer", "collectionCustomerFilter", "supplyOrderCustomerFilter", "deliveryNoteCustomerFilter", "invoiceCustomerFilter", "salesReturnCustomerFilter"].includes(select.id) ? "كل العملاء" : "اختر العميل";
+  placeholder.textContent = ["collectionReportCustomer", "collectionCustomerFilter", "supplyOrderCustomerFilter", "deliveryNoteCustomerFilter", "invoiceCustomerFilter", "salesReturnCustomerFilter", "customerDiscountCustomerFilter"].includes(select.id) ? "كل العملاء" : "اختر العميل";
   select.appendChild(placeholder);
   state.customers.forEach((customer) => {
     const option = document.createElement("option");
@@ -1288,7 +1289,7 @@ function renderInvoices() {
       <td data-label="المسؤول">${item.responsible || "-"}</td>
       <td data-label="الأصناف">${money(item.item_count)}</td>
       <td data-label="الرصيد قبلها">${money(item.balance_before)}</td>
-      <td data-label="قيمة الفاتورة">${money(item.total)} ${item.transaction_type === "gift" ? `<span class="gift-badge">مجانية</span>` : ""} ${item.requires_review ? `<span class="review-badge">يحتاج مراجعة</span>` : ""}</td>
+      <td data-label="قيمة الفاتورة">${money(item.total)} ${item.transaction_type === "gift" ? `<span class="gift-badge">مجانية</span>` : ""} ${item.requires_review ? `<span class="review-badge">يحتاج مراجعة</span>` : ""}${Number(item.discounts_total||0)>0?`<br><small class="muted">خصومات: ${money(item.discounts_total)} — صافي: ${money(item.net_due)}</small>`:""}</td>
       <td data-label="الرصيد بعدها">${money(item.balance_after_invoice)}${item.transaction_type === "direct_cash" ? `<br><small class="muted">بعد التحصيل الفوري: ${money(item.balance_after_operation)}</small>` : ""}</td>
       <td data-label="المستخدم">${item.created_by_name || "-"}</td>
       <td class="actions">
@@ -1371,6 +1372,18 @@ function renderSalesReturns() {
   </tr>`).join("") || `<tr><td colspan="9" class="muted">لا توجد مرتجعات مسجلة</td></tr>`;
 }
 
+function fillDiscountInvoiceSelect(selected="") {
+  const select=qs('#customerDiscountForm select[name="invoice_id"]'); if(!select)return;
+  select.innerHTML='<option value="">اختر الفاتورة</option>'+state.returnableInvoices.map((item)=>`<option value="${item.id}">#${item.id} — ${escapeHtml(item.customer_name)} — ${money(item.total)}</option>`).join("");
+  select.value=String(selected||""); refreshSearchableSelect(select);
+}
+
+function renderCustomerDiscounts(){
+  const customerId=qs("#customerDiscountCustomerFilter")?.value;
+  const rows=state.customerDiscounts.filter((item)=>!customerId||String(item.customer_id)===String(customerId));
+  qs("#customerDiscountRows").innerHTML=rows.map((item)=>`<tr><td>${item.id}</td><td>${item.discount_date}</td><td>#${item.invoice_id}</td><td>${escapeHtml(item.customer_name)}</td><td>${escapeHtml(item.discount_type)}</td><td>${money(item.amount)}</td><td>${escapeHtml(item.note||"-")}</td><td>${escapeHtml(item.created_by_name||"-")}</td><td class="actions">${isAdmin()?`<button type="button" data-edit-customer-discount="${item.id}">✎</button>`:""}<button type="button" data-xlsx-customer-discount="${item.id}">Excel</button><button type="button" data-pdf-customer-discount="${item.id}">PDF</button>${isAdmin()?`<button class="danger" type="button" data-delete-customer-discount="${item.id}">×</button>`:""}</td></tr>`).join("")||'<tr><td colspan="9" class="muted">لا توجد خصومات مسجلة</td></tr>';
+}
+
 function renderUsers() {
   const body = qs("#userRows");
   if (!body) return;
@@ -1448,10 +1461,10 @@ function renderReceivables() {
   qs("#receivablesSummary").textContent = `عدد النتائج: ${rows.length} — بداية الحساب: ${data?.period_start || state.accountingStartDate}${data?.scope && data.scope !== "all" ? ` — العملاء التابعون لـ ${data.scope}` : ""}`;
   qs("#receivablesRows").innerHTML = rows.map((item,index) => `<tr>
     <td data-label="الترتيب">${index+1}</td><td data-label="العميل">${escapeHtml(item.name)}</td><td data-label="المسؤول">${escapeHtml(item.responsible || "غير محدد")}</td>
-    <td data-label="رصيد أول المدة">${money(item.opening_balance)}</td><td data-label="الفواتير">${money(item.invoices)}</td><td data-label="التحصيلات">${money(item.collections)}</td><td data-label="المرتجعات">${money(item.returns)}</td>
+    <td data-label="رصيد أول المدة">${money(item.opening_balance)}</td><td data-label="الفواتير">${money(item.invoices)}</td><td data-label="التحصيلات">${money(item.collections)}</td><td data-label="المرتجعات">${money(item.returns)}</td><td data-label="الخصومات">${money(item.discounts)}</td>
     <td data-label="صافي المديونية"><strong class="${item.balance < 0 ? "credit-value" : ""}">${money(item.balance)}</strong></td><td data-label="آخر فاتورة">${item.last_invoice_date || "-"}</td><td data-label="آخر تحصيل">${item.last_collection_date || "لم يسدد"}</td>
     <td data-label="منذ آخر تحصيل">${item.days_since_last_collection == null ? "لم يسدد" : `${money(item.days_since_last_collection)} يوم`}</td><td><button type="button" data-open-customer-statement="${item.id}">كشف الحساب</button></td>
-  </tr>`).join("") || `<tr><td colspan="12" class="muted">لا توجد نتائج مطابقة</td></tr>`;
+  </tr>`).join("") || `<tr><td colspan="13" class="muted">لا توجد نتائج مطابقة</td></tr>`;
 }
 
 function renderResponsibleMonthly() {
@@ -1580,7 +1593,7 @@ function printInvoice(id) {
   printDocument(`فاتورة #${invoice.id}`, [
     { type: "meta", rows: [["التاريخ", invoice.invoice_date || "-"], ["العميل", invoice.customer_name || "-"], ["المسؤول", invoice.responsible || "-"], ["إذن التسليم", `#${invoice.delivery_note_id}`]] },
     { type: "table", title: "الأصناف", headers: ["#", "الصنف", "التصميم", "المقاس", "العدد", "أمر التوريد", "السعر", "السريل", "الإجمالي"], rows: (invoice.items || []).map((item) => [item.line_no, item.product_type, item.design_name || "-", item.size_name || "-", `${money(item.quantity_amount)} ${item.quantity_unit || ""}`, item.supply_order_id ? `#${item.supply_order_id}` : "-", money(item.unit_price), Number(item.serial_total || 0) > 0 ? money(item.serial_total) : "لا يوجد سريل", money(item.line_total)]) },
-    { type: "totals", rows: [["إجمالي الأصناف", money(invoice.subtotal)], ["إجمالي السريل", Number(invoice.serial_total || 0) > 0 ? money(invoice.serial_total) : "لا يوجد سريل"], ["مصاريف النقل", money(invoice.delivery_charge)], ["رصيد العميل قبل الفاتورة", money(invoice.balance_before)], ["قيمة الفاتورة", money(invoice.total)], ["الرصيد بعد الفاتورة", money(invoice.balance_after_invoice)], ...(invoice.transaction_type === "direct_cash" ? [["التحصيل النقدي الفوري", money(invoice.immediate_collection_amount)], ["الرصيد بعد إتمام البيع النقدي", money(invoice.balance_after_operation)]] : [])] },
+    { type: "totals", rows: [["إجمالي الأصناف", money(invoice.subtotal)], ["إجمالي السريل", Number(invoice.serial_total || 0) > 0 ? money(invoice.serial_total) : "لا يوجد سريل"], ["مصاريف النقل", money(invoice.delivery_charge)], ["رصيد العميل قبل الفاتورة", money(invoice.balance_before)], ["قيمة الفاتورة", money(invoice.total)], ["إجمالي المرتجعات",money(invoice.returns_total||0)],["إجمالي الخصومات",money(invoice.discounts_total||0)],["صافي الفاتورة",money(invoice.net_due??invoice.total)],["الرصيد بعد الفاتورة", money(invoice.balance_after_invoice)], ...(invoice.transaction_type === "direct_cash" ? [["التحصيل النقدي الفوري", money(invoice.immediate_collection_amount)], ["الرصيد بعد إتمام البيع النقدي", money(invoice.balance_after_operation)]] : [])] },
   ], { branded: true });
 }
 
@@ -1610,7 +1623,7 @@ function printReceivables() {
   if (!data) throw new Error("اعرض المديونيات أولًا");
   printDocument("تقرير مديونيات العملاء", [
     { type: "totals", rows: [["تاريخ التقرير",new Date().toISOString().slice(0,10)],["بداية الفترة",data.period_start],["إجمالي المديونيات",money(data.totals.debt)],["العملاء المدينون",money(data.totals.debt_customers)],["إجمالي الأرصدة الدائنة",money(data.totals.credit)],["أكبر مديونية",money(data.totals.largest_debt)]] },
-    { type: "table", title: "العملاء", headers: ["#","العميل","المسؤول","رصيد أول المدة","الفواتير","التحصيلات","المرتجعات","صافي المديونية","آخر فاتورة","آخر تحصيل"], rows: data.items.map((row,index) => [index+1,row.name,row.responsible || "غير محدد",money(row.opening_balance),money(row.invoices),money(row.collections),money(row.returns),money(row.balance),row.last_invoice_date || "-",row.last_collection_date || "لم يسدد"]) },
+    { type: "table", title: "العملاء", headers: ["#","العميل","المسؤول","رصيد أول المدة","الفواتير","التحصيلات","المرتجعات","الخصومات","صافي المديونية","آخر فاتورة","آخر تحصيل"], rows: data.items.map((row,index) => [index+1,row.name,row.responsible || "غير محدد",money(row.opening_balance),money(row.invoices),money(row.collections),money(row.returns),money(row.discounts),money(row.balance),row.last_invoice_date || "-",row.last_collection_date || "لم يسدد"]) },
   ], { branded: true });
 }
 
@@ -1636,6 +1649,7 @@ async function loadBootstrap() {
   fillCustomerSelect(qs("#deliveryNoteCustomerFilter"), qs("#deliveryNoteCustomerFilter")?.value);
   fillCustomerSelect(qs("#invoiceCustomerFilter"), qs("#invoiceCustomerFilter")?.value);
   fillCustomerSelect(qs("#salesReturnCustomerFilter"), qs("#salesReturnCustomerFilter")?.value);
+  fillCustomerSelect(qs("#customerDiscountCustomerFilter"),qs("#customerDiscountCustomerFilter")?.value);
   fillCustomerSelect(qs("#statementCustomer"), qs("#statementCustomer")?.value);
   qsa('select[name="collection_type"]').forEach((select) => fillSelect(select, state.collectionTypes, select.value));
   fillSelect(qs("#collectionReportType"), ["", ...state.collectionTypes], qs("#collectionReportType")?.value);
@@ -1686,6 +1700,7 @@ async function loadCustomers() {
   fillCustomerSelect(qs("#deliveryNoteCustomerFilter"), qs("#deliveryNoteCustomerFilter")?.value);
   fillCustomerSelect(qs("#invoiceCustomerFilter"), qs("#invoiceCustomerFilter")?.value);
   fillCustomerSelect(qs("#salesReturnCustomerFilter"), qs("#salesReturnCustomerFilter")?.value);
+  fillCustomerSelect(qs("#customerDiscountCustomerFilter"),qs("#customerDiscountCustomerFilter")?.value);
   fillSupplyOrderFormLookups();
   fillDeliveryNoteFormLookups();
 }
@@ -1749,6 +1764,11 @@ async function loadSalesReturns() {
   state.returnableInvoices = invoiceData.items;
   renderSalesReturns();
   fillReturnInvoiceSelect(qs('#salesReturnForm select[name="invoice_id"]')?.value);
+}
+
+async function loadCustomerDiscounts(){
+  const data=await api("/api/customer-discounts"); state.customerDiscounts=data.items||[]; renderCustomerDiscounts();
+  fillDiscountInvoiceSelect(qs('#customerDiscountForm select[name="invoice_id"]')?.value);
 }
 
 async function loadReceivables() {
@@ -1835,7 +1855,7 @@ async function loadResponsibleMonthly() {
 async function reloadAll() {
   await loadBootstrap();
   if (isCollector()) {
-    await Promise.all([loadCollections(), loadSupplyOrders(), loadDeliveryNotes(), loadInvoices(), loadReceivables()]);
+    await Promise.all([loadCollections(), loadSupplyOrders(), loadDeliveryNotes(), loadInvoices(), loadCustomerDiscounts(),loadReceivables()]);
     return;
   }
   if (isPlanner()) {
@@ -1843,10 +1863,10 @@ async function reloadAll() {
     return;
   }
   if (isInvoiceIssuer()) {
-    await Promise.all([loadSupplyOrders(), loadDeliveryNotes(), loadInvoices(), loadSalesReturns(), loadReceivables(), loadOpeningBalances()]);
+    await Promise.all([loadSupplyOrders(), loadDeliveryNotes(), loadInvoices(), loadSalesReturns(),loadCustomerDiscounts(), loadReceivables(), loadOpeningBalances()]);
     return;
   }
-  await Promise.all([loadDashboard(), loadCollections(), loadCustomers(), loadOpeningBalances(), loadExpenses(), loadTransfers(), loadSupplyOrders(), loadDeliveryNotes(), loadInvoices(), loadSalesReturns(), loadReceivables(), loadUsers(), loadAudit(), loadExpenseReport(), loadCollectionReport(), loadResponsibleMonthly()]);
+  await Promise.all([loadDashboard(), loadCollections(), loadCustomers(), loadOpeningBalances(), loadExpenses(), loadTransfers(), loadSupplyOrders(), loadDeliveryNotes(), loadInvoices(), loadSalesReturns(),loadCustomerDiscounts(), loadReceivables(), loadUsers(), loadAudit(), loadExpenseReport(), loadCollectionReport(), loadResponsibleMonthly()]);
 }
 
 function formData(form) {
@@ -2479,6 +2499,14 @@ function editSalesReturn(id) {
   form.scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
+function resetCustomerDiscountForm(){const form=qs("#customerDiscountForm");form.reset();form.elements.id.value="";form.discount_date.value=new Date().toISOString().slice(0,10);form.discount_date.min=state.accountingStartDate;form.invoice_id.disabled=false;qs("#customerDiscountFormTitle").textContent="إضافة خصم عميل";qs("#cancelCustomerDiscountEdit").classList.add("hidden");fillDiscountInvoiceSelect();}
+
+async function saveCustomerDiscount(event){event.preventDefault();const form=event.currentTarget;const id=form.elements.id.value;const payload={invoice_id:Number(form.invoice_id.value),discount_date:form.discount_date.value,discount_type:form.discount_type.value,amount:Number(form.amount.value),note:form.note.value};if(id)await api(`/api/customer-discounts/${id}`,{method:"PUT",body:JSON.stringify(payload)});else await api("/api/customer-discounts",{method:"POST",body:JSON.stringify(payload)});showToast(id?"تم تحديث الخصم":"تم إصدار إشعار الخصم");resetCustomerDiscountForm();await Promise.all([loadCustomerDiscounts(),loadInvoices(),loadReceivables(),loadAudit()]);}
+
+function editCustomerDiscount(id){const item=state.customerDiscounts.find((row)=>String(row.id)===String(id));if(!item)return;setPageMode("customerDiscounts","entry");const form=qs("#customerDiscountForm");form.elements.id.value=item.id;fillDiscountInvoiceSelect(item.invoice_id);form.invoice_id.value=item.invoice_id;form.invoice_id.disabled=true;form.discount_date.value=item.discount_date;form.discount_type.value=item.discount_type;form.amount.value=item.amount;form.note.value=item.note||"";qs("#customerDiscountFormTitle").textContent=`تعديل خصم #${item.id}`;qs("#cancelCustomerDiscountEdit").classList.remove("hidden");form.scrollIntoView({behavior:"smooth",block:"start"});}
+
+function printCustomerDiscount(id){const item=state.customerDiscounts.find((row)=>String(row.id)===String(id));if(!item)return;printDocument(`إشعار خصم #${item.id}`,[{type:"meta",rows:[["التاريخ",item.discount_date],["العميل",item.customer_name],["الفاتورة الأصلية",`#${item.invoice_id}`],["نوع الخصم",item.discount_type],["قيمة الخصم",money(item.amount)],["ملاحظة",item.note||"-"]]}],{branded:true});}
+
 async function saveUser(event) {
   event.preventDefault();
   const form = event.currentTarget;
@@ -2867,6 +2895,7 @@ function bindEvents() {
   bindFormAction("#supplyOrderForm", saveSupplyOrder);
   bindFormAction("#deliveryNoteForm", saveDeliveryNote);
   bindFormAction("#salesReturnForm", saveSalesReturn);
+  bindFormAction("#customerDiscountForm", saveCustomerDiscount);
   bindFormAction("#coverDeliveryForm", saveCoverDelivery);
   bindFormAction("#coverRequirementsForm", saveCoverRequirements);
   bindFormAction("#expenseForm", saveExpense);
@@ -2935,6 +2964,7 @@ function bindEvents() {
   qs("#deliveryNoteCustomerFilter").addEventListener("change", renderDeliveryNotes);
   qs("#invoiceCustomerFilter").addEventListener("change", renderInvoices);
   qs("#salesReturnCustomerFilter").addEventListener("change", renderSalesReturns);
+  qs("#customerDiscountCustomerFilter").addEventListener("change",renderCustomerDiscounts);
   qs("#openingBalanceCustomerFilter").addEventListener("change", renderOpeningBalances);
   qs("#customerSearch").addEventListener("input", renderCustomers);
   qs("#collectionMonth").addEventListener("change", loadCollections);
@@ -3001,6 +3031,7 @@ function bindEvents() {
   qs("#salesReturnItemEditor").addEventListener("change", recalculateSalesReturnTotal);
   qs('#salesReturnForm input[name="refund_serial"]').addEventListener("change", recalculateSalesReturnTotal);
   qs('#salesReturnForm input[name="refund_delivery"]').addEventListener("change", recalculateSalesReturnTotal);
+  qs("#cancelCustomerDiscountEdit").addEventListener("click",resetCustomerDiscountForm);
 
   document.addEventListener("click", (event) => {
     const collectionEdit = event.target.closest("[data-edit-collection]");
@@ -3028,6 +3059,10 @@ function bindEvents() {
     const salesReturnDelete = event.target.closest("[data-delete-sales-return]");
     const salesReturnXlsx = event.target.closest("[data-xlsx-sales-return]");
     const salesReturnPdf = event.target.closest("[data-pdf-sales-return]");
+    const customerDiscountEdit=event.target.closest("[data-edit-customer-discount]");
+    const customerDiscountDelete=event.target.closest("[data-delete-customer-discount]");
+    const customerDiscountXlsx=event.target.closest("[data-xlsx-customer-discount]");
+    const customerDiscountPdf=event.target.closest("[data-pdf-customer-discount]");
     const saveCustomerResponsibleButton = event.target.closest("[data-save-customer-responsible]");
     const openCustomerStatementButton = event.target.closest("[data-open-customer-statement]");
     const editCustomerButton = event.target.closest("[data-edit-customer]");
@@ -3056,6 +3091,10 @@ function bindEvents() {
     if (salesReturnDelete && confirm(`حذف المرتجع رقم ${salesReturnDelete.dataset.deleteSalesReturn}؟ سيعود تأثيره إلى رصيد العميل.`)) api(`/api/sales-returns/${salesReturnDelete.dataset.deleteSalesReturn}`, { method: "DELETE" }).then(async () => { showToast("تم حذف المرتجع"); await Promise.all([loadSalesReturns(),loadInvoices(),loadAudit()]); }).catch((error) => showToast(error.message,true));
     if (salesReturnXlsx) window.location.href = `/api/sales-returns/${salesReturnXlsx.dataset.xlsxSalesReturn}.xlsx`;
     if (salesReturnPdf) printSalesReturn(salesReturnPdf.dataset.pdfSalesReturn);
+    if(customerDiscountEdit)editCustomerDiscount(customerDiscountEdit.dataset.editCustomerDiscount);
+    if(customerDiscountDelete&&confirm(`حذف الخصم رقم ${customerDiscountDelete.dataset.deleteCustomerDiscount}؟`))api(`/api/customer-discounts/${customerDiscountDelete.dataset.deleteCustomerDiscount}`,{method:"DELETE"}).then(async()=>{showToast("تم حذف الخصم");await Promise.all([loadCustomerDiscounts(),loadInvoices(),loadReceivables(),loadAudit()]);}).catch((error)=>showToast(error.message,true));
+    if(customerDiscountXlsx)window.location.href=`/api/customer-discounts/${customerDiscountXlsx.dataset.xlsxCustomerDiscount}.xlsx`;
+    if(customerDiscountPdf)printCustomerDiscount(customerDiscountPdf.dataset.pdfCustomerDiscount);
     if (saveCustomerResponsibleButton) saveCustomerResponsible(saveCustomerResponsibleButton.dataset.saveCustomerResponsible).catch((error) => showToast(error.message, true));
     if (openCustomerStatementButton) {
       setActiveTab("customerStatement");
@@ -3087,6 +3126,7 @@ async function init() {
     resetDeliveryNoteForm();
     resetInvoiceForm();
     resetSalesReturnForm();
+    resetCustomerDiscountForm();
     resetOpeningBalanceForm();
     resetCustomerForm();
     applyAccountingDateConstraints();

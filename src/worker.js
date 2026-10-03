@@ -120,6 +120,14 @@ async function handleApi(request, env, url) {
     if (method === "PUT") return updateSalesReturn(request, env, user, id);
     if (method === "DELETE") return deleteSalesReturn(env, user, id);
   }
+  if (url.pathname === "/api/customer-discounts" && method === "GET") return listCustomerDiscounts(env);
+  if (url.pathname === "/api/customer-discounts" && method === "POST") return createCustomerDiscount(request, env, user);
+  if (/^\/api\/customer-discounts\/\d+\.xlsx$/.test(url.pathname) && method === "GET") return customerDiscountXlsxResponse(env, idFromExportPath(url.pathname));
+  if (/^\/api\/customer-discounts\/\d+$/.test(url.pathname)) {
+    const id = idFromPath(url.pathname);
+    if (method === "PUT") return updateCustomerDiscount(request, env, user, id);
+    if (method === "DELETE") return deleteCustomerDiscount(env, user, id);
+  }
   if (url.pathname === "/api/payment-methods" && method === "GET") return paymentMethods(env);
   if (url.pathname === "/api/payment-methods" && method === "POST") return createPaymentMethod(request, env, user);
   if (url.pathname === "/api/expense-accounts" && method === "GET") return expenseAccounts(env);
@@ -153,8 +161,8 @@ function authorizeApiRequest(user, pathname, method) {
   if (role === "viewer" && method === "GET") return;
   if (role === "collector") {
     const canRead = method === "GET" && (
-      ["/api/me", "/api/bootstrap", "/api/collections", "/api/supply-orders", "/api/delivery-notes", "/api/invoices", "/api/customer-statement", "/api/customer-statement.xlsx", "/api/receivables", "/api/receivables.xlsx", "/api/backup"].includes(pathname)
-      || /^\/api\/(supply-orders|delivery-notes|invoices)\/\d+\.xlsx$/.test(pathname)
+      ["/api/me", "/api/bootstrap", "/api/collections", "/api/supply-orders", "/api/delivery-notes", "/api/invoices", "/api/customer-statement", "/api/customer-statement.xlsx", "/api/receivables", "/api/receivables.xlsx", "/api/customer-discounts", "/api/backup"].includes(pathname)
+      || /^\/api\/(supply-orders|delivery-notes|invoices|customer-discounts)\/\d+\.xlsx$/.test(pathname)
     );
     const canInsert = method === "POST" && (["/api/collections", "/api/supply-orders", "/api/delivery-notes", "/api/direct-sales", "/api/gifts"].includes(pathname)
       || /^\/api\/delivery-notes\/\d+\/cover-deliveries$/.test(pathname));
@@ -169,8 +177,8 @@ function authorizeApiRequest(user, pathname, method) {
   }
   if (role === "invoice_issuer") {
     const canRead = method === "GET" && (
-      ["/api/me", "/api/bootstrap", "/api/supply-orders", "/api/delivery-notes", "/api/invoices", "/api/invoice-balance-preview", "/api/customer-statement", "/api/customer-statement.xlsx", "/api/receivables", "/api/receivables.xlsx", "/api/returnable-invoices", "/api/sales-returns", "/api/backup"].includes(pathname)
-      || /^\/api\/(supply-orders|delivery-notes|invoices|sales-returns)\/\d+\.xlsx$/.test(pathname)
+      ["/api/me", "/api/bootstrap", "/api/supply-orders", "/api/delivery-notes", "/api/invoices", "/api/invoice-balance-preview", "/api/customer-statement", "/api/customer-statement.xlsx", "/api/receivables", "/api/receivables.xlsx", "/api/returnable-invoices", "/api/sales-returns", "/api/customer-discounts", "/api/backup"].includes(pathname)
+      || /^\/api\/(supply-orders|delivery-notes|invoices|sales-returns|customer-discounts)\/\d+\.xlsx$/.test(pathname)
     );
     if (canRead || (method === "GET" && pathname === "/api/opening-balances") || (method === "POST" && ["/api/invoices", "/api/opening-balances", "/api/sales-returns"].includes(pathname))) return;
   }
@@ -675,17 +683,19 @@ async function listCustomers(env) {
             COALESCE(period_invoices.total, 0) AS period_invoices,
             COALESCE(period_collections.total, 0) AS period_collections,
             COALESCE(period_returns.total, 0) AS period_returns,
+            COALESCE(period_discounts.total, 0) AS period_discounts,
             COALESCE(period_collections.count, 0) AS collection_count,
             period_collections.last_date AS last_collection_date,
-            COALESCE(opening.opening_balance, 0) + COALESCE(period_invoices.total, 0) - COALESCE(period_collections.total, 0) - COALESCE(period_returns.total, 0) AS current_balance
+            COALESCE(opening.opening_balance, 0) + COALESCE(period_invoices.total, 0) - COALESCE(period_collections.total, 0) - COALESCE(period_returns.total, 0) - COALESCE(period_discounts.total,0) AS current_balance
      FROM customers
      LEFT JOIN customer_opening_balances opening ON opening.customer_id = customers.id AND opening.effective_date = ? AND opening.is_set=1
      LEFT JOIN (SELECT customer_id, SUM(total) AS total FROM invoices WHERE invoice_date >= ? GROUP BY customer_id) period_invoices ON period_invoices.customer_id = customers.id
      LEFT JOIN (SELECT customer_id, SUM(amount) AS total, COUNT(*) AS count, MAX(entry_date) AS last_date FROM collections WHERE entry_date >= ? GROUP BY customer_id) period_collections ON period_collections.customer_id = customers.id
      LEFT JOIN (SELECT customer_id, SUM(total) AS total FROM sales_returns WHERE return_date >= ? GROUP BY customer_id) period_returns ON period_returns.customer_id = customers.id
+     LEFT JOIN (SELECT customer_id, SUM(amount) AS total FROM customer_discounts WHERE discount_date >= ? GROUP BY customer_id) period_discounts ON period_discounts.customer_id = customers.id
      WHERE customers.active = 1
      ORDER BY current_balance DESC, customers.name`
-  ).bind(ACCOUNTING_START_DATE, ACCOUNTING_START_DATE, ACCOUNTING_START_DATE, ACCOUNTING_START_DATE).all();
+  ).bind(ACCOUNTING_START_DATE, ACCOUNTING_START_DATE, ACCOUNTING_START_DATE, ACCOUNTING_START_DATE, ACCOUNTING_START_DATE).all();
   return json({ items: result.results });
 }
 
@@ -845,8 +855,9 @@ async function customerStatementData(env, customerId, dateFrom = ACCOUNTING_STAR
     `SELECT ?
        + COALESCE((SELECT SUM(total) FROM invoices WHERE customer_id=? AND invoice_date>=? AND invoice_date<?),0)
        - COALESCE((SELECT SUM(amount) FROM collections WHERE customer_id=? AND entry_date>=? AND entry_date<?),0)
-       - COALESCE((SELECT SUM(total) FROM sales_returns WHERE customer_id=? AND return_date>=? AND return_date<?),0) AS balance`
-  ).bind(Number(customer.opening_balance || 0),customerId,ACCOUNTING_START_DATE,dateFrom,customerId,ACCOUNTING_START_DATE,dateFrom,customerId,ACCOUNTING_START_DATE,dateFrom).first();
+       - COALESCE((SELECT SUM(total) FROM sales_returns WHERE customer_id=? AND return_date>=? AND return_date<?),0)
+       - COALESCE((SELECT SUM(amount) FROM customer_discounts WHERE customer_id=? AND discount_date>=? AND discount_date<?),0) AS balance`
+  ).bind(Number(customer.opening_balance || 0),customerId,ACCOUNTING_START_DATE,dateFrom,customerId,ACCOUNTING_START_DATE,dateFrom,customerId,ACCOUNTING_START_DATE,dateFrom,customerId,ACCOUNTING_START_DATE,dateFrom).first();
   const invoices = await env.DB.prepare(`SELECT id,invoice_date,delivery_note_id,subtotal,serial_total,delivery_charge,total,note,created_at FROM invoices WHERE customer_id=? AND invoice_date>=? AND invoice_date<=? ORDER BY invoice_date,created_at,id`).bind(customerId,dateFrom,dateTo).all();
   const invoiceItems = await env.DB.prepare(`SELECT invoice_items.*,invoices.invoice_date,invoices.delivery_note_id,invoices.note AS invoice_note,invoices.created_at AS invoice_created_at FROM invoice_items JOIN invoices ON invoices.id=invoice_items.invoice_id WHERE invoices.customer_id=? AND invoices.invoice_date>=? AND invoices.invoice_date<=? ORDER BY invoices.invoice_date,invoices.created_at,invoices.id,invoice_items.line_no`).bind(customerId,dateFrom,dateTo).all();
   const collections = await env.DB.prepare(
@@ -862,6 +873,7 @@ async function customerStatementData(env, customerId, dateFrom = ACCOUNTING_STAR
      ORDER BY return_date,created_at,id`
   ).bind(customerId,dateFrom,dateTo).all();
   const returnItems = await env.DB.prepare(`SELECT sales_return_items.*,sales_returns.return_date,sales_returns.invoice_id,sales_returns.reason,sales_returns.note AS return_note,sales_returns.created_at AS return_created_at FROM sales_return_items JOIN sales_returns ON sales_returns.id=sales_return_items.return_id WHERE sales_returns.customer_id=? AND sales_returns.return_date>=? AND sales_returns.return_date<=? ORDER BY sales_returns.return_date,sales_returns.created_at,sales_returns.id,sales_return_items.line_no`).bind(customerId,dateFrom,dateTo).all();
+  const discounts=await env.DB.prepare(`SELECT * FROM customer_discounts WHERE customer_id=? AND discount_date>=? AND discount_date<=? ORDER BY discount_date,created_at,id`).bind(customerId,dateFrom,dateTo).all();
   const events = [{kind:"opening",date:dateFrom,created_at:"",id:0,order:0,description:dateFrom===ACCOUNTING_START_DATE?"رصيد أول المدة":"رصيد سابق للفترة",quantity:"",unit_price:null,supply_value:0,collection_value:0,note:""}];
   const invoiceItemTotals = new Map();
   invoiceItems.results.forEach((item) => events.push({kind:"invoice",date:item.invoice_date,created_at:item.invoice_created_at,id:item.invoice_id,order:item.line_no,description:`فاتورة #${item.invoice_id} — ${item.product_type}${item.design_name?` — ${item.design_name}`:""}${item.size_name?` — ${item.size_name}`:""}`,quantity:`${item.quantity_amount} ${item.quantity_unit || ""}`,unit_price:Number(item.unit_price||0),supply_value:Number(item.line_total||0),collection_value:0,note:item.invoice_note||""}));
@@ -878,25 +890,29 @@ async function customerStatementData(env, customerId, dateFrom = ACCOUNTING_STAR
     if(Number(item.serial_refund||0)>0) events.push({kind:"return",date:item.return_date,created_at:item.created_at,id:item.id,order:9001,description:`رد قيمة السريل — مرتجع #${item.id}`,quantity:"",unit_price:null,supply_value:-Number(item.serial_refund),collection_value:0,note:item.reason||""});
     if(Number(item.delivery_refund||0)>0) events.push({kind:"return",date:item.return_date,created_at:item.created_at,id:item.id,order:9002,description:`رد مصاريف النقل — مرتجع #${item.id}`,quantity:"",unit_price:null,supply_value:-Number(item.delivery_refund),collection_value:0,note:item.reason||""});
   });
-  const rank={opening:0,invoice:1,return:2,collection:3};
+  discounts.results.forEach((item)=>events.push({kind:"discount",date:item.discount_date,created_at:item.created_at,id:item.id,order:0,description:`خصم #${item.id} — ${item.discount_type} — فاتورة #${item.invoice_id}`,quantity:"",unit_price:null,supply_value:-Number(item.amount||0),collection_value:0,note:item.note||""}));
+  const rank={opening:0,invoice:1,return:2,discount:3,collection:4};
   events.sort((a,b)=>String(a.date).localeCompare(String(b.date))||String(a.created_at).localeCompare(String(b.created_at))||(rank[a.kind]-rank[b.kind])||(a.id-b.id)||(a.order-b.order));
   let running=currencyValue(before?.balance||0);
   const ledger=events.map((event,index)=>{if(index>0) running=currencyValue(running+Number(event.supply_value||0)-Number(event.collection_value||0)); return {...event,balance:running};});
   const totalInvoices = invoices.results.reduce((sum, item) => sum + Number(item.total || 0), 0);
   const totalCollections = collections.results.reduce((sum, item) => sum + Number(item.amount || 0), 0);
   const totalReturns = returns.results.reduce((sum, item) => sum + Number(item.total || 0), 0);
+  const totalDiscounts=discounts.results.reduce((sum,item)=>sum+Number(item.amount||0),0);
   return {
     customer,
     period_start: ACCOUNTING_START_DATE,date_from:dateFrom,date_to:dateTo,generated_date:new Date().toISOString().slice(0,10),ledger,
     invoices: invoices.results,
     collections: collections.results,
     returns: returns.results,
+    discounts:discounts.results,
     totals: {
       opening_balance: Number(customer.opening_balance || 0),
       invoices: totalInvoices,
       collections: totalCollections,
       returns: totalReturns,
-      net_supplies:currencyValue(totalInvoices-totalReturns),
+      discounts:totalDiscounts,
+      net_supplies:currencyValue(totalInvoices-totalReturns-totalDiscounts),
       remaining: running,
     },
     balance_words: arabicCurrencyWords(running),
@@ -912,15 +928,17 @@ async function receivablesData(env, user, url) {
             COALESCE(inv.total,0) AS invoices,
             COALESCE(col.total,0) AS collections,
             COALESCE(ret.total,0) AS returns,
-            COALESCE(opening.opening_balance,0)+COALESCE(inv.total,0)-COALESCE(col.total,0)-COALESCE(ret.total,0) AS balance,
+            COALESCE(dis.total,0) AS discounts,
+            COALESCE(opening.opening_balance,0)+COALESCE(inv.total,0)-COALESCE(col.total,0)-COALESCE(ret.total,0)-COALESCE(dis.total,0) AS balance,
             inv.last_date AS last_invoice_date,col.last_date AS last_collection_date
      FROM customers
      LEFT JOIN customer_opening_balances opening ON opening.customer_id=customers.id AND opening.effective_date=? AND opening.is_set=1
      LEFT JOIN (SELECT customer_id,SUM(total) AS total,MAX(invoice_date) AS last_date FROM invoices WHERE invoice_date>=? GROUP BY customer_id) inv ON inv.customer_id=customers.id
      LEFT JOIN (SELECT customer_id,SUM(amount) AS total,MAX(entry_date) AS last_date FROM collections WHERE entry_date>=? GROUP BY customer_id) col ON col.customer_id=customers.id
      LEFT JOIN (SELECT customer_id,SUM(total) AS total FROM sales_returns WHERE return_date>=? GROUP BY customer_id) ret ON ret.customer_id=customers.id
+     LEFT JOIN (SELECT customer_id,SUM(amount) AS total FROM customer_discounts WHERE discount_date>=? GROUP BY customer_id) dis ON dis.customer_id=customers.id
      WHERE customers.active=1 AND COALESCE(customers.is_transient,0)=0`
-  ).bind(ACCOUNTING_START_DATE,ACCOUNTING_START_DATE,ACCOUNTING_START_DATE,ACCOUNTING_START_DATE).all();
+  ).bind(ACCOUNTING_START_DATE,ACCOUNTING_START_DATE,ACCOUNTING_START_DATE,ACCOUNTING_START_DATE,ACCOUNTING_START_DATE).all();
   const today = new Date().toISOString().slice(0,10);
   const q = normalizedCustomerKey(url.searchParams.get("q") || "");
   const requestedResponsible = String(url.searchParams.get("responsible") || "").trim();
@@ -932,7 +950,7 @@ async function receivablesData(env, user, url) {
   const baseRows = result.results.map((row) => {
     const balance = currencyValue(row.balance);
     const days = row.last_collection_date ? Math.max(0, Math.floor((Date.parse(`${today}T00:00:00Z`) - Date.parse(`${row.last_collection_date}T00:00:00Z`)) / 86400000)) : null;
-    return { ...row, opening_balance: currencyValue(row.opening_balance), invoices: currencyValue(row.invoices), collections: currencyValue(row.collections), returns: currencyValue(row.returns), balance, days_since_last_collection: days };
+    return { ...row, opening_balance: currencyValue(row.opening_balance), invoices: currencyValue(row.invoices), collections: currencyValue(row.collections), returns: currencyValue(row.returns), discounts:currencyValue(row.discounts), balance, days_since_last_collection: days };
   }).filter((row) => {
     if (q && !normalizedCustomerKey(row.name).includes(q)) return false;
     if (responsible && row.responsible !== responsible) return false;
@@ -973,8 +991,8 @@ async function receivablesXlsx(env, user, url) {
   addRow(["الشركة المصرية للأكواب والعبوات الورقية","","","","","","","","",""],"brand",4);
   addRow(["تقرير مديونيات العملاء"],"title",10);
   addRow(["تاريخ التقرير",new Date().toISOString().slice(0,10),"بداية الفترة",data.period_start,"إجمالي المديونيات",data.totals.debt,"عدد العملاء المدينين",data.totals.debt_customers,"إجمالي الأرصدة الدائنة",data.totals.credit],"meta");
-  addRow(["#","العميل","المسؤول","رصيد أول المدة","الفواتير","التحصيلات","المرتجعات","صافي المديونية","آخر فاتورة","آخر تحصيل"],"header");
-  data.items.forEach((row,index) => addRow([index+1,row.name,row.responsible || "",row.opening_balance,row.invoices,row.collections,row.returns,row.balance,row.last_invoice_date || "",row.last_collection_date || ""]));
+  addRow(["#","العميل","المسؤول","رصيد أول المدة","الفواتير","التحصيلات","المرتجعات","الخصومات","صافي المديونية","آخر فاتورة","آخر تحصيل"],"header");
+  data.items.forEach((row,index) => addRow([index+1,row.name,row.responsible || "",row.opening_balance,row.invoices,row.collections,row.returns,row.discounts,row.balance,row.last_invoice_date || "",row.last_collection_date || ""]));
   addRow(["","","","","","","","إجمالي المديونيات المستحقة",data.totals.debt,""],"total");
   const prepared = normalizeSheetRows(rows);
   return xlsxDownload(reportXlsx("مديونيات العملاء",prepared.rows,prepared.merges,{brandLogo:await xlsxBrandLogo(env),logoColumn:7}),`customer-receivables-${new Date().toISOString().slice(0,10)}.xlsx`);
@@ -1672,7 +1690,7 @@ function arabicCurrencyWords(value) {
 
 async function addInvoiceBalances(env, requestedInvoices) {
   if (!requestedInvoices.length) return [];
-  const [openingRows, invoiceRows, collectionRows, returnRows] = await Promise.all([
+  const [openingRows, invoiceRows, collectionRows, returnRows,discountRows] = await Promise.all([
     env.DB.prepare(
       `SELECT customer_id, opening_balance FROM customer_opening_balances
        WHERE effective_date = ? AND is_set = 1`
@@ -1686,9 +1704,10 @@ async function addInvoiceBalances(env, requestedInvoices) {
        FROM collections WHERE entry_date >= ? AND customer_id IS NOT NULL`
     ).bind(ACCOUNTING_START_DATE).all(),
     env.DB.prepare(
-      `SELECT id, customer_id, return_date, total, created_at
+      `SELECT id, invoice_id, customer_id, return_date, total, created_at
        FROM sales_returns WHERE return_date >= ? AND customer_id IS NOT NULL`
     ).bind(ACCOUNTING_START_DATE).all(),
+    env.DB.prepare(`SELECT id,invoice_id,customer_id,discount_date,amount,created_at FROM customer_discounts WHERE discount_date>=? AND customer_id IS NOT NULL`).bind(ACCOUNTING_START_DATE).all(),
   ]);
   const openingByCustomer = new Map(openingRows.results.map((row) => [String(row.customer_id), currencyValue(row.opening_balance)]));
   const eventsByCustomer = new Map();
@@ -1700,6 +1719,7 @@ async function addInvoiceBalances(env, requestedInvoices) {
   invoiceRows.results.forEach((row) => addEvent(row.customer_id, { ...row, kind: "invoice", date: row.invoice_date }));
   collectionRows.results.forEach((row) => addEvent(row.customer_id, { ...row, kind: "collection", date: row.entry_date }));
   returnRows.results.forEach((row) => addEvent(row.customer_id, { ...row, kind: "return", date: row.return_date }));
+  discountRows.results.forEach((row)=>addEvent(row.customer_id,{...row,kind:"discount",date:row.discount_date,total:row.amount}));
 
   const balancesByInvoice = new Map();
   eventsByCustomer.forEach((events, customerId) => {
@@ -1734,8 +1754,13 @@ async function addInvoiceBalances(env, requestedInvoices) {
       }
     });
   });
+  const returnsByInvoice=new Map();returnRows.results.forEach((row)=>returnsByInvoice.set(String(row.invoice_id),currencyValue(Number(returnsByInvoice.get(String(row.invoice_id))||0)+Number(row.total||0))));
+  const discountsByInvoice=new Map();discountRows.results.forEach((row)=>discountsByInvoice.set(String(row.invoice_id),currencyValue(Number(discountsByInvoice.get(String(row.invoice_id))||0)+Number(row.amount||0))));
   return requestedInvoices.map((invoice) => ({
     ...invoice,
+    returns_total:returnsByInvoice.get(String(invoice.id))||0,
+    discounts_total:discountsByInvoice.get(String(invoice.id))||0,
+    net_due:currencyValue(Number(invoice.total||0)-Number(returnsByInvoice.get(String(invoice.id))||0)-Number(discountsByInvoice.get(String(invoice.id))||0)),
     ...(balancesByInvoice.get(String(invoice.id)) || {
       balance_before: 0,
       balance_after_invoice: currencyValue(invoice.total),
@@ -1765,8 +1790,9 @@ async function invoiceBalancePreview(env, url) {
        COALESCE((SELECT opening_balance FROM customer_opening_balances WHERE customer_id=? AND effective_date=? AND is_set=1),0)
        + COALESCE((SELECT SUM(total) FROM invoices WHERE customer_id=? AND invoice_date>=? AND invoice_date<=? AND (? IS NULL OR id<>?)),0)
        - COALESCE((SELECT SUM(amount) FROM collections WHERE customer_id=? AND entry_date>=? AND entry_date<=?),0)
-       - COALESCE((SELECT SUM(total) FROM sales_returns WHERE customer_id=? AND return_date>=? AND return_date<=?),0) AS balance_before`
-  ).bind(customerId, ACCOUNTING_START_DATE, customerId, ACCOUNTING_START_DATE, invoiceDate, invoiceId, invoiceId, customerId, ACCOUNTING_START_DATE, invoiceDate, customerId, ACCOUNTING_START_DATE, invoiceDate).first();
+       - COALESCE((SELECT SUM(total) FROM sales_returns WHERE customer_id=? AND return_date>=? AND return_date<=?),0)
+       - COALESCE((SELECT SUM(amount) FROM customer_discounts WHERE customer_id=? AND discount_date>=? AND discount_date<=?),0) AS balance_before`
+  ).bind(customerId, ACCOUNTING_START_DATE, customerId, ACCOUNTING_START_DATE, invoiceDate, invoiceId, invoiceId, customerId, ACCOUNTING_START_DATE, invoiceDate, customerId, ACCOUNTING_START_DATE, invoiceDate,customerId,ACCOUNTING_START_DATE,invoiceDate).first();
   return json({ balance_before: currencyValue(row?.balance_before) });
 }
 
@@ -1788,6 +1814,9 @@ async function invoiceXlsxResponse(env, id) {
   addRow(["", "", "", "", "", "", "", "إجمالي السريل", Number(invoice.serial_total || 0) > 0 ? invoice.serial_total : "لا يوجد سريل"], "total");
   addRow(["", "", "", "", "", "", "", "مصاريف النقل", invoice.delivery_charge || 0], "total");
   addRow(["", "", "", "", "", "", "", "إجمالي الفاتورة", invoice.total || 0], "total");
+  addRow(["", "", "", "", "", "", "", "إجمالي المرتجعات", invoice.returns_total || 0], "total");
+  addRow(["", "", "", "", "", "", "", "إجمالي الخصومات", invoice.discounts_total || 0], "total");
+  addRow(["", "", "", "", "", "", "", "صافي الفاتورة", invoice.net_due ?? invoice.total], "total");
   addRow(["", "", "", "", "", "", "", "رصيد العميل قبل الفاتورة", invoice.balance_before], "total");
   addRow(["", "", "", "", "", "", "", "الرصيد بعد الفاتورة", invoice.balance_after_invoice], "total");
   if (invoice.transaction_type === "direct_cash") {
@@ -1953,6 +1982,8 @@ async function updateInvoice(request, env, user, id) {
   if (before.transaction_type === "direct_cash") throw new HttpError("يتم تعديل البيع النقدي المباشر من سجل التحصيلات", 409);
   const linkedReturn = await env.DB.prepare("SELECT id FROM sales_returns WHERE invoice_id=? LIMIT 1").bind(id).first();
   if (linkedReturn) throw new HttpError("لا يمكن تعديل فاتورة مرتبطة بمرتجع مبيعات؛ عدّل أو احذف المرتجع أولًا", 409);
+  const linkedDiscount=await env.DB.prepare("SELECT id FROM customer_discounts WHERE invoice_id=? LIMIT 1").bind(id).first();
+  if(linkedDiscount)throw new HttpError("لا يمكن تعديل فاتورة مرتبطة بخصم؛ عدّل أو احذف الخصم أولًا",409);
   assertRecordNotArchived(before, "invoice_date");
   const data = await prepareInvoice(env, await readJson(request), id);
   assertAccountingDate(data.invoice_date, "تاريخ الفاتورة");
@@ -1974,6 +2005,8 @@ async function deleteInvoice(env, user, id) {
   if (before.transaction_type === "direct_cash") throw new HttpError("يتم حذف البيع النقدي المباشر من سجل التحصيلات", 409);
   const linkedReturn = await env.DB.prepare("SELECT id FROM sales_returns WHERE invoice_id=? LIMIT 1").bind(id).first();
   if (linkedReturn) throw new HttpError("لا يمكن حذف فاتورة مرتبطة بمرتجع مبيعات", 409);
+  const linkedDiscount=await env.DB.prepare("SELECT id FROM customer_discounts WHERE invoice_id=? LIMIT 1").bind(id).first();
+  if(linkedDiscount)throw new HttpError("لا يمكن حذف فاتورة مرتبطة بخصم",409);
   assertRecordNotArchived(before, "invoice_date");
   await env.DB.prepare("DELETE FROM invoice_items WHERE invoice_id = ?").bind(id).run();
   await env.DB.prepare("DELETE FROM invoices WHERE id = ?").bind(id).run();
@@ -2148,6 +2181,70 @@ async function salesReturnXlsxResponse(env, id) {
   addRow(["","","","","","","إجمالي الإشعار الدائن",item.total],"total");
   const prepared = normalizeSheetRows(rows);
   return xlsxDownload(reportXlsx(`مرتجع ${id}`,prepared.rows,prepared.merges,{brandLogo:await xlsxBrandLogo(env),logoColumn:5}),`sales-return-${id}.xlsx`);
+}
+
+async function customerDiscountWithInvoice(env, id) {
+  return env.DB.prepare(`SELECT customer_discounts.*,users.display_name AS created_by_name,
+    invoices.total AS invoice_total,invoices.invoice_date
+    FROM customer_discounts LEFT JOIN users ON users.id=customer_discounts.created_by
+    JOIN invoices ON invoices.id=customer_discounts.invoice_id WHERE customer_discounts.id=?`).bind(id).first();
+}
+
+async function listCustomerDiscounts(env) {
+  const result = await env.DB.prepare(`SELECT customer_discounts.*,users.display_name AS created_by_name,
+    invoices.total AS invoice_total,invoices.invoice_date
+    FROM customer_discounts LEFT JOIN users ON users.id=customer_discounts.created_by
+    JOIN invoices ON invoices.id=customer_discounts.invoice_id
+    ORDER BY customer_discounts.discount_date DESC,customer_discounts.id DESC LIMIT 500`).all();
+  return json({items:result.results});
+}
+
+async function prepareCustomerDiscount(env, payload, discountId=null) {
+  const discountDate=parseDateValue(payload.discount_date)||new Date().toISOString().slice(0,10);
+  assertAccountingDate(discountDate,"تاريخ الخصم");
+  const invoiceId=Number(payload.invoice_id||0); const amount=currencyValue(payload.amount);
+  const type=String(payload.discount_type||"").trim(); const note=String(payload.note||"").trim()||null;
+  if(!invoiceId) throw new HttpError("الفاتورة مطلوبة",400);
+  if(!type) throw new HttpError("نوع الخصم مطلوب",400);
+  if(!(amount>0)) throw new HttpError("قيمة الخصم يجب أن تكون أكبر من صفر",400);
+  const invoice=await env.DB.prepare("SELECT * FROM invoices WHERE id=?").bind(invoiceId).first();
+  if(!invoice) throw new HttpError("الفاتورة غير صحيحة",400);
+  if(String(invoice.transaction_type||"standard")!=="standard") throw new HttpError("الخصومات غير متاحة للبيع النقدي المباشر أو الهدية",400);
+  if(discountDate<String(invoice.invoice_date||"")) throw new HttpError("تاريخ الخصم لا يمكن أن يسبق تاريخ الفاتورة",400);
+  const current=discountId?await customerDiscountWithInvoice(env,discountId):null;
+  if(current&&Number(current.invoice_id)!==invoiceId) throw new HttpError("لا يمكن تغيير الفاتورة الأصلية للخصم",400);
+  const used=await env.DB.prepare(`SELECT
+    COALESCE((SELECT SUM(total) FROM sales_returns WHERE invoice_id=?),0)+
+    COALESCE((SELECT SUM(amount) FROM customer_discounts WHERE invoice_id=? AND (? IS NULL OR id<>?)),0) AS total`).bind(invoiceId,invoiceId,discountId,discountId).first();
+  const available=currencyValue(Number(invoice.total||0)-Number(used?.total||0));
+  if(amount>available+0.004) throw new HttpError(`قيمة الخصم تتجاوز المتاح على الفاتورة (${available})`,400);
+  return {discount_date:discountDate,invoice_id:invoiceId,customer_id:invoice.customer_id,customer_name:invoice.customer_name,discount_type:type,amount,note};
+}
+
+async function createCustomerDiscount(request,env,user){
+  assertCanWrite(user); const data=await prepareCustomerDiscount(env,await readJson(request)); const now=nowIso();
+  const result=await env.DB.prepare(`INSERT INTO customer_discounts(discount_date,invoice_id,customer_id,customer_name,discount_type,amount,note,created_by,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)`).bind(data.discount_date,data.invoice_id,data.customer_id,data.customer_name,data.discount_type,data.amount,data.note,user.id,now,now).run();
+  await insertAudit(env,request,user,"INSERT","customer_discounts",result.meta.last_row_id,null,data);
+  return json({id:result.meta.last_row_id,amount:data.amount});
+}
+
+async function updateCustomerDiscount(request,env,user,id){
+  assertCanWrite(user); const before=await customerDiscountWithInvoice(env,id); if(!before)throw new HttpError("الخصم غير موجود",404);
+  const data=await prepareCustomerDiscount(env,await readJson(request),id); const now=nowIso();
+  await env.DB.prepare(`UPDATE customer_discounts SET discount_date=?,discount_type=?,amount=?,note=?,updated_at=? WHERE id=?`).bind(data.discount_date,data.discount_type,data.amount,data.note,now,id).run();
+  await insertAudit(env,request,user,"UPDATE","customer_discounts",id,before,data); return json({ok:true,amount:data.amount});
+}
+
+async function deleteCustomerDiscount(env,user,id){
+  assertCanWrite(user); const before=await customerDiscountWithInvoice(env,id); if(!before)throw new HttpError("الخصم غير موجود",404);
+  await env.DB.prepare("DELETE FROM customer_discounts WHERE id=?").bind(id).run();
+  await insertAudit(env,null,user,"DELETE","customer_discounts",id,before,null); return json({ok:true});
+}
+
+async function customerDiscountXlsxResponse(env,id){
+  const item=await customerDiscountWithInvoice(env,id); if(!item)throw new HttpError("الخصم غير موجود",404);
+  const prepared=documentSheetRows("إشعار خصم",[["رقم الإشعار",item.id],["التاريخ",item.discount_date],["العميل",item.customer_name],["الفاتورة الأصلية",item.invoice_id],["نوع الخصم",item.discount_type],["قيمة الخصم",item.amount],["ملاحظة",item.note||""]]);
+  return xlsxDownload(reportXlsx(`إشعار خصم ${id}`,prepared.rows,prepared.merges,{brandLogo:await xlsxBrandLogo(env),logoColumn:3}),`customer-discount-${id}.xlsx`);
 }
 
 async function createDirectSale(request, env, user) {
@@ -3175,7 +3272,7 @@ async function auditLog(env, user) {
 async function backup(env, user) {
   if (!user) throw new HttpError("Authentication required", 401);
   const tables = {};
-  const backupTables = ["users", "payment_methods", "expense_accounts", "customers", "custody_holders", "designs", "product_sizes", "materials", "collections", "expenses", "transfers", "supply_orders", "delivery_notes", "delivery_note_items", "cover_delivery_events", "invoices", "invoice_items", "sales_returns", "sales_return_items", "audit_logs"];
+  const backupTables = ["users", "payment_methods", "expense_accounts", "customers", "custody_holders", "designs", "product_sizes", "materials", "collections", "expenses", "transfers", "supply_orders", "delivery_notes", "delivery_note_items", "cover_delivery_events", "invoices", "invoice_items", "sales_returns", "sales_return_items", "customer_discounts", "audit_logs"];
   for (const table of backupTables) {
     const result = await env.DB.prepare(`SELECT * FROM ${table} ORDER BY id`).all();
     tables[table] = result.results.map((row) => {
