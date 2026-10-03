@@ -71,6 +71,8 @@ async function handleApi(request, env, url) {
   }
   if (url.pathname === "/api/customer-statement" && method === "GET") return customerStatement(env, url);
   if (url.pathname === "/api/customer-statement.xlsx" && method === "GET") return customerStatementXlsx(env, url);
+  if (url.pathname === "/api/receivables" && method === "GET") return receivables(env, user, url);
+  if (url.pathname === "/api/receivables.xlsx" && method === "GET") return receivablesXlsx(env, user, url);
   if (url.pathname === "/api/opening-balances" && method === "GET") return listOpeningBalances(env);
   if (url.pathname === "/api/opening-balances" && method === "POST") return createOpeningBalance(request, env, user);
   if (url.pathname.startsWith("/api/opening-balances/")) {
@@ -150,7 +152,7 @@ function authorizeApiRequest(user, pathname, method) {
   if (role === "viewer" && method === "GET") return;
   if (role === "collector") {
     const canRead = method === "GET" && (
-      ["/api/me", "/api/bootstrap", "/api/collections", "/api/supply-orders", "/api/delivery-notes", "/api/invoices", "/api/customer-statement", "/api/customer-statement.xlsx", "/api/backup"].includes(pathname)
+      ["/api/me", "/api/bootstrap", "/api/collections", "/api/supply-orders", "/api/delivery-notes", "/api/invoices", "/api/customer-statement", "/api/customer-statement.xlsx", "/api/receivables", "/api/receivables.xlsx", "/api/backup"].includes(pathname)
       || /^\/api\/(supply-orders|delivery-notes|invoices)\/\d+\.xlsx$/.test(pathname)
     );
     const canInsert = method === "POST" && (["/api/collections", "/api/supply-orders", "/api/delivery-notes", "/api/direct-sales", "/api/gifts"].includes(pathname)
@@ -166,7 +168,7 @@ function authorizeApiRequest(user, pathname, method) {
   }
   if (role === "invoice_issuer") {
     const canRead = method === "GET" && (
-      ["/api/me", "/api/bootstrap", "/api/supply-orders", "/api/delivery-notes", "/api/invoices", "/api/invoice-balance-preview", "/api/customer-statement", "/api/customer-statement.xlsx", "/api/returnable-invoices", "/api/sales-returns", "/api/backup"].includes(pathname)
+      ["/api/me", "/api/bootstrap", "/api/supply-orders", "/api/delivery-notes", "/api/invoices", "/api/invoice-balance-preview", "/api/customer-statement", "/api/customer-statement.xlsx", "/api/receivables", "/api/receivables.xlsx", "/api/returnable-invoices", "/api/sales-returns", "/api/backup"].includes(pathname)
       || /^\/api\/(supply-orders|delivery-notes|invoices|sales-returns)\/\d+\.xlsx$/.test(pathname)
     );
     if (canRead || (method === "GET" && pathname === "/api/opening-balances") || (method === "POST" && ["/api/invoices", "/api/opening-balances", "/api/sales-returns"].includes(pathname))) return;
@@ -854,6 +856,83 @@ async function customerStatementData(env, customerId) {
       remaining: Number(customer.opening_balance || 0) + totalInvoices - totalCollections - totalReturns,
     },
   };
+}
+
+async function receivablesData(env, user, url) {
+  const role = effectiveRole(user);
+  if (!["admin", "viewer", "collector", "invoice_issuer"].includes(role)) throw new HttpError("ليس لديك صلاحية لعرض المديونيات", 403);
+  const result = await env.DB.prepare(
+    `SELECT customers.id,customers.name,customers.responsible,
+            COALESCE(opening.opening_balance,0) AS opening_balance,
+            COALESCE(inv.total,0) AS invoices,
+            COALESCE(col.total,0) AS collections,
+            COALESCE(ret.total,0) AS returns,
+            COALESCE(opening.opening_balance,0)+COALESCE(inv.total,0)-COALESCE(col.total,0)-COALESCE(ret.total,0) AS balance,
+            inv.last_date AS last_invoice_date,col.last_date AS last_collection_date
+     FROM customers
+     LEFT JOIN customer_opening_balances opening ON opening.customer_id=customers.id AND opening.effective_date=? AND opening.is_set=1
+     LEFT JOIN (SELECT customer_id,SUM(total) AS total,MAX(invoice_date) AS last_date FROM invoices WHERE invoice_date>=? GROUP BY customer_id) inv ON inv.customer_id=customers.id
+     LEFT JOIN (SELECT customer_id,SUM(amount) AS total,MAX(entry_date) AS last_date FROM collections WHERE entry_date>=? GROUP BY customer_id) col ON col.customer_id=customers.id
+     LEFT JOIN (SELECT customer_id,SUM(total) AS total FROM sales_returns WHERE return_date>=? GROUP BY customer_id) ret ON ret.customer_id=customers.id
+     WHERE customers.active=1 AND COALESCE(customers.is_transient,0)=0`
+  ).bind(ACCOUNTING_START_DATE,ACCOUNTING_START_DATE,ACCOUNTING_START_DATE,ACCOUNTING_START_DATE).all();
+  const today = new Date().toISOString().slice(0,10);
+  const q = normalizedCustomerKey(url.searchParams.get("q") || "");
+  const requestedResponsible = String(url.searchParams.get("responsible") || "").trim();
+  const responsible = role === "collector" ? String(user.display_name || "").trim() : requestedResponsible;
+  const status = String(url.searchParams.get("status") || "debt");
+  const minDebt = Math.max(0, Number(url.searchParams.get("min_debt") || 0) || 0);
+  const inactiveDays = Math.max(0, Number(url.searchParams.get("inactive_days") || 0) || 0);
+  const sort = url.searchParams.get("sort") === "asc" ? "asc" : "desc";
+  const baseRows = result.results.map((row) => {
+    const balance = currencyValue(row.balance);
+    const days = row.last_collection_date ? Math.max(0, Math.floor((Date.parse(`${today}T00:00:00Z`) - Date.parse(`${row.last_collection_date}T00:00:00Z`)) / 86400000)) : null;
+    return { ...row, opening_balance: currencyValue(row.opening_balance), invoices: currencyValue(row.invoices), collections: currencyValue(row.collections), returns: currencyValue(row.returns), balance, days_since_last_collection: days };
+  }).filter((row) => {
+    if (q && !normalizedCustomerKey(row.name).includes(q)) return false;
+    if (responsible && row.responsible !== responsible) return false;
+    if (minDebt > 0 && row.balance < minDebt) return false;
+    if (inactiveDays > 0 && row.days_since_last_collection !== null && row.days_since_last_collection < inactiveDays) return false;
+    return true;
+  });
+  const rows = baseRows.filter((row) => {
+    if (status === "debt") return row.balance > 0.004;
+    if (status === "zero") return Math.abs(row.balance) <= 0.004;
+    if (status === "credit") return row.balance < -0.004;
+    return true;
+  }).sort((left,right) => sort === "asc" ? left.balance-right.balance : right.balance-left.balance);
+  const debtRows = baseRows.filter((row) => row.balance > 0.004);
+  const creditRows = baseRows.filter((row) => row.balance < -0.004);
+  return {
+    items: rows,
+    totals: {
+      debt: currencyValue(debtRows.reduce((sum,row) => sum+row.balance,0)),
+      debt_customers: debtRows.length,
+      credit: currencyValue(Math.abs(creditRows.reduce((sum,row) => sum+row.balance,0))),
+      zero_customers: baseRows.filter((row) => Math.abs(row.balance) <= 0.004).length,
+      largest_debt: debtRows.length ? Math.max(...debtRows.map((row) => row.balance)) : 0,
+    },
+    period_start: ACCOUNTING_START_DATE,
+    scope: role === "collector" ? responsible : "all",
+  };
+}
+
+async function receivables(env, user, url) {
+  return json(await receivablesData(env,user,url));
+}
+
+async function receivablesXlsx(env, user, url) {
+  const data = await receivablesData(env,user,url);
+  const rows = [];
+  const addRow = (values,style="normal",mergeAcross=0) => rows.push({values,style,mergeAcross});
+  addRow(["الشركة المصرية للأكواب والعبوات الورقية","","","","","","","","",""],"brand",4);
+  addRow(["تقرير مديونيات العملاء"],"title",10);
+  addRow(["تاريخ التقرير",new Date().toISOString().slice(0,10),"بداية الفترة",data.period_start,"إجمالي المديونيات",data.totals.debt,"عدد العملاء المدينين",data.totals.debt_customers,"إجمالي الأرصدة الدائنة",data.totals.credit],"meta");
+  addRow(["#","العميل","المسؤول","رصيد أول المدة","الفواتير","التحصيلات","المرتجعات","صافي المديونية","آخر فاتورة","آخر تحصيل"],"header");
+  data.items.forEach((row,index) => addRow([index+1,row.name,row.responsible || "",row.opening_balance,row.invoices,row.collections,row.returns,row.balance,row.last_invoice_date || "",row.last_collection_date || ""]));
+  addRow(["","","","","","","","إجمالي المديونيات المستحقة",data.totals.debt,""],"total");
+  const prepared = normalizeSheetRows(rows);
+  return xlsxDownload(reportXlsx("مديونيات العملاء",prepared.rows,prepared.merges,{brandLogo:await xlsxBrandLogo(env),logoColumn:7}),`customer-receivables-${new Date().toISOString().slice(0,10)}.xlsx`);
 }
 
 async function listSupplyOrders(env) {

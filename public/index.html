@@ -66,6 +66,7 @@
         <button class="tab" data-tab="invoices" type="button">الفواتير</button>
         <button class="tab" data-tab="salesReturns" type="button">المرتجعات</button>
         <button class="tab" data-tab="customerStatement" type="button">كشف حساب</button>
+        <button class="tab" data-tab="receivables" type="button">مديونيات العملاء</button>
         <button class="tab" data-tab="openingBalances" type="button">أرصدة أول المدة</button>
         <button class="tab" data-tab="expenses" type="button">المصروفات</button>
         <button class="tab" data-tab="treasury" type="button">الخزينة</button>
@@ -442,6 +443,35 @@
               <div class="table-wrap records"><table><thead><tr><th>رقم</th><th>التاريخ</th><th>الفاتورة الأصلية</th><th>السبب</th><th>القيمة</th></tr></thead><tbody id="statementReturnRows"></tbody></table></div>
             </div>
           </div>
+        </div>
+      </section>
+
+      <section id="receivables" class="tab-panel">
+        <div class="panel">
+          <div class="panel-head"><div><h2>مديونيات العملاء</h2><p class="muted">الرصيد = رصيد أول المدة + الفواتير - التحصيلات - المرتجعات</p></div><div class="actions"><button id="exportReceivablesExcelBtn" type="button">Excel</button><button id="exportReceivablesPdfBtn" type="button">PDF</button></div></div>
+          <section class="metrics statement-metrics">
+            <div class="metric accent"><span>إجمالي المديونيات</span><strong id="receivablesDebtTotal">0</strong></div>
+            <div class="metric"><span>العملاء المدينون</span><strong id="receivablesDebtCount">0</strong></div>
+            <div class="metric"><span>إجمالي الأرصدة الدائنة</span><strong id="receivablesCreditTotal">0</strong></div>
+            <div class="metric"><span>أكبر مديونية</span><strong id="receivablesLargestDebt">0</strong></div>
+            <div class="metric"><span>بدون مديونية</span><strong id="receivablesZeroCount">0</strong></div>
+          </section>
+          <div class="page-action-tabs" role="tablist" aria-label="تصنيف المديونيات">
+            <button class="page-action-tab active" data-receivables-status="debt" type="button">عليهم مديونية</button>
+            <button class="page-action-tab" data-receivables-status="zero" type="button">رصيد صفر</button>
+            <button class="page-action-tab" data-receivables-status="credit" type="button">لهم رصيد دائن</button>
+            <button class="page-action-tab" data-receivables-status="all" type="button">الكل</button>
+          </div>
+          <div class="filters report-filters">
+            <label>بحث العميل<input id="receivablesSearch" autocomplete="off" placeholder="اكتب جزءًا من اسم العميل"></label>
+            <label>المسؤول<select id="receivablesResponsible"><option value="">كل المسؤولين</option></select></label>
+            <label>حد أدنى للمديونية<input id="receivablesMinimum" type="number" min="0" step="0.01" placeholder="0"></label>
+            <label>لم يسدد منذ<input id="receivablesInactiveDays" type="number" min="0" step="1" placeholder="عدد الأيام"></label>
+            <label>الترتيب<select id="receivablesSort"><option value="desc">الأعلى مديونية أولًا</option><option value="asc">الأقل أولًا</option></select></label>
+            <button id="applyReceivablesFilters" type="button">تطبيق</button><button id="resetReceivablesFilters" class="secondary" type="button">مسح الفلاتر</button>
+          </div>
+          <p class="muted" id="receivablesSummary"></p>
+          <div class="table-wrap records"><table><thead><tr><th>الترتيب</th><th>العميل</th><th>المسؤول</th><th>رصيد أول المدة</th><th>الفواتير</th><th>التحصيلات</th><th>المرتجعات</th><th>صافي المديونية</th><th>آخر فاتورة</th><th>آخر تحصيل</th><th>منذ آخر تحصيل</th><th></th></tr></thead><tbody id="receivablesRows"></tbody></table></div>
         </div>
       </section>
 

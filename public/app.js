@@ -17,6 +17,8 @@ const state = {
   invoices: [],
   returnableInvoices: [],
   salesReturns: [],
+  receivables: null,
+  receivablesStatus: "debt",
   invoiceDraft: null,
   customerStatement: null,
   openingBalances: [],
@@ -284,9 +286,9 @@ function applyRolePermissions() {
   const planner = isPlanner();
   const invoiceIssuer = isInvoiceIssuer();
   qsa(".tab").forEach((tab) => {
-    const allowedForCollector = ["collections", "supplyOrders", "deliveryNotes", "invoices", "customerStatement"].includes(tab.dataset.tab);
+    const allowedForCollector = ["collections", "supplyOrders", "deliveryNotes", "invoices", "customerStatement", "receivables"].includes(tab.dataset.tab);
     const allowedForPlanner = tab.dataset.tab === "supplyOrders";
-    const allowedForInvoiceIssuer = ["supplyOrders", "deliveryNotes", "invoices", "salesReturns", "customerStatement", "openingBalances"].includes(tab.dataset.tab);
+    const allowedForInvoiceIssuer = ["supplyOrders", "deliveryNotes", "invoices", "salesReturns", "customerStatement", "receivables", "openingBalances"].includes(tab.dataset.tab);
     tab.classList.toggle("hidden", (collector && !allowedForCollector) || (planner && !allowedForPlanner) || (invoiceIssuer && !allowedForInvoiceIssuer));
   });
   qsa(".admin-only").forEach((item) => item.classList.toggle("hidden", !isAdmin()));
@@ -1455,6 +1457,36 @@ function renderCustomerStatement() {
   }
 }
 
+function receivablesParams() {
+  const params = new URLSearchParams({ status: state.receivablesStatus, sort: qs("#receivablesSort")?.value || "desc" });
+  const q = qs("#receivablesSearch")?.value.trim();
+  const responsible = qs("#receivablesResponsible")?.value;
+  const minimum = qs("#receivablesMinimum")?.value;
+  const inactiveDays = qs("#receivablesInactiveDays")?.value;
+  if (q) params.set("q", q);
+  if (responsible && !isCollector()) params.set("responsible", responsible);
+  if (minimum) params.set("min_debt", minimum);
+  if (inactiveDays) params.set("inactive_days", inactiveDays);
+  return params;
+}
+
+function renderReceivables() {
+  const data = state.receivables;
+  qs("#receivablesDebtTotal").textContent = money(data?.totals?.debt || 0);
+  qs("#receivablesDebtCount").textContent = money(data?.totals?.debt_customers || 0);
+  qs("#receivablesCreditTotal").textContent = money(data?.totals?.credit || 0);
+  qs("#receivablesLargestDebt").textContent = money(data?.totals?.largest_debt || 0);
+  qs("#receivablesZeroCount").textContent = money(data?.totals?.zero_customers || 0);
+  const rows = data?.items || [];
+  qs("#receivablesSummary").textContent = `عدد النتائج: ${rows.length} — بداية الحساب: ${data?.period_start || state.accountingStartDate}${data?.scope && data.scope !== "all" ? ` — العملاء التابعون لـ ${data.scope}` : ""}`;
+  qs("#receivablesRows").innerHTML = rows.map((item,index) => `<tr>
+    <td data-label="الترتيب">${index+1}</td><td data-label="العميل">${escapeHtml(item.name)}</td><td data-label="المسؤول">${escapeHtml(item.responsible || "غير محدد")}</td>
+    <td data-label="رصيد أول المدة">${money(item.opening_balance)}</td><td data-label="الفواتير">${money(item.invoices)}</td><td data-label="التحصيلات">${money(item.collections)}</td><td data-label="المرتجعات">${money(item.returns)}</td>
+    <td data-label="صافي المديونية"><strong class="${item.balance < 0 ? "credit-value" : ""}">${money(item.balance)}</strong></td><td data-label="آخر فاتورة">${item.last_invoice_date || "-"}</td><td data-label="آخر تحصيل">${item.last_collection_date || "لم يسدد"}</td>
+    <td data-label="منذ آخر تحصيل">${item.days_since_last_collection == null ? "لم يسدد" : `${money(item.days_since_last_collection)} يوم`}</td><td><button type="button" data-open-customer-statement="${item.id}">كشف الحساب</button></td>
+  </tr>`).join("") || `<tr><td colspan="12" class="muted">لا توجد نتائج مطابقة</td></tr>`;
+}
+
 function renderResponsibleMonthly() {
   const body = qs("#responsibleMonthlyRows");
   if (!body) return;
@@ -1597,6 +1629,15 @@ function printCustomerStatement() {
   ], { branded: true });
 }
 
+function printReceivables() {
+  const data = state.receivables;
+  if (!data) throw new Error("اعرض المديونيات أولًا");
+  printDocument("تقرير مديونيات العملاء", [
+    { type: "totals", rows: [["تاريخ التقرير",new Date().toISOString().slice(0,10)],["بداية الفترة",data.period_start],["إجمالي المديونيات",money(data.totals.debt)],["العملاء المدينون",money(data.totals.debt_customers)],["إجمالي الأرصدة الدائنة",money(data.totals.credit)],["أكبر مديونية",money(data.totals.largest_debt)]] },
+    { type: "table", title: "العملاء", headers: ["#","العميل","المسؤول","رصيد أول المدة","الفواتير","التحصيلات","المرتجعات","صافي المديونية","آخر فاتورة","آخر تحصيل"], rows: data.items.map((row,index) => [index+1,row.name,row.responsible || "غير محدد",money(row.opening_balance),money(row.invoices),money(row.collections),money(row.returns),money(row.balance),row.last_invoice_date || "-",row.last_collection_date || "لم يسدد"]) },
+  ], { branded: true });
+}
+
 async function loadBootstrap() {
   const data = await api("/api/bootstrap");
   state.paymentMethods = data.payment_methods;
@@ -1625,6 +1666,9 @@ async function loadBootstrap() {
   qs("#collectionReportType").options[0].textContent = "كل الأنواع";
   fillSelect(qs("#collectionReportResponsible"), ["", ...state.responsibles], qs("#collectionReportResponsible")?.value);
   qs("#collectionReportResponsible").options[0].textContent = "كل المسؤولين";
+  fillSelect(qs("#receivablesResponsible"), ["", ...state.responsibles], qs("#receivablesResponsible")?.value);
+  qs("#receivablesResponsible").options[0].textContent = "كل المسؤولين";
+  qs("#receivablesResponsible").disabled = isCollector();
   qsa('select[name="payment_method"]').forEach((select) => fillSelect(select, state.paymentMethods));
   qsa('select[name="expense_account_id"]').forEach((select) => fillExpenseAccountSelect(select, select.value));
   fillExpenseReportCodes();
@@ -1731,6 +1775,11 @@ async function loadSalesReturns() {
   fillReturnInvoiceSelect(qs('#salesReturnForm select[name="invoice_id"]')?.value);
 }
 
+async function loadReceivables() {
+  state.receivables = await api(`/api/receivables?${receivablesParams().toString()}`);
+  renderReceivables();
+}
+
 async function loadUsers() {
   if (!state.user || (!isAdmin() && !isViewer())) {
     state.users = [];
@@ -1798,7 +1847,7 @@ async function loadResponsibleMonthly() {
 async function reloadAll() {
   await loadBootstrap();
   if (isCollector()) {
-    await Promise.all([loadCollections(), loadSupplyOrders(), loadDeliveryNotes(), loadInvoices()]);
+    await Promise.all([loadCollections(), loadSupplyOrders(), loadDeliveryNotes(), loadInvoices(), loadReceivables()]);
     return;
   }
   if (isPlanner()) {
@@ -1806,10 +1855,10 @@ async function reloadAll() {
     return;
   }
   if (isInvoiceIssuer()) {
-    await Promise.all([loadSupplyOrders(), loadDeliveryNotes(), loadInvoices(), loadSalesReturns(), loadOpeningBalances()]);
+    await Promise.all([loadSupplyOrders(), loadDeliveryNotes(), loadInvoices(), loadSalesReturns(), loadReceivables(), loadOpeningBalances()]);
     return;
   }
-  await Promise.all([loadDashboard(), loadCollections(), loadCustomers(), loadOpeningBalances(), loadExpenses(), loadTransfers(), loadSupplyOrders(), loadDeliveryNotes(), loadInvoices(), loadSalesReturns(), loadUsers(), loadAudit(), loadExpenseReport(), loadCollectionReport(), loadResponsibleMonthly()]);
+  await Promise.all([loadDashboard(), loadCollections(), loadCustomers(), loadOpeningBalances(), loadExpenses(), loadTransfers(), loadSupplyOrders(), loadDeliveryNotes(), loadInvoices(), loadSalesReturns(), loadReceivables(), loadUsers(), loadAudit(), loadExpenseReport(), loadCollectionReport(), loadResponsibleMonthly()]);
 }
 
 function formData(form) {
@@ -2778,6 +2827,18 @@ function bindEvents() {
       showToast(error.message, true);
     }
   });
+  qsa("[data-receivables-status]").forEach((button) => button.addEventListener("click", async () => {
+    state.receivablesStatus = button.dataset.receivablesStatus;
+    qsa("[data-receivables-status]").forEach((item) => item.classList.toggle("active", item === button));
+    try { await loadReceivables(); } catch (error) { showToast(error.message,true); }
+  }));
+  qs("#applyReceivablesFilters").addEventListener("click", () => loadReceivables().catch((error) => showToast(error.message,true)));
+  qs("#resetReceivablesFilters").addEventListener("click", async () => {
+    qs("#receivablesSearch").value = ""; qs("#receivablesResponsible").value = ""; qs("#receivablesMinimum").value = ""; qs("#receivablesInactiveDays").value = ""; qs("#receivablesSort").value = "desc";
+    try { await loadReceivables(); } catch (error) { showToast(error.message,true); }
+  });
+  qs("#exportReceivablesExcelBtn").addEventListener("click", () => { window.location.href = `/api/receivables.xlsx?${receivablesParams().toString()}`; });
+  qs("#exportReceivablesPdfBtn").addEventListener("click", () => { try { printReceivables(); } catch (error) { showToast(error.message,true); } });
 
   qs("#expenseReportType").addEventListener("change", () => {
     fillExpenseReportCodes();
@@ -2974,6 +3035,7 @@ function bindEvents() {
     const salesReturnXlsx = event.target.closest("[data-xlsx-sales-return]");
     const salesReturnPdf = event.target.closest("[data-pdf-sales-return]");
     const saveCustomerResponsibleButton = event.target.closest("[data-save-customer-responsible]");
+    const openCustomerStatementButton = event.target.closest("[data-open-customer-statement]");
     if (collectionEdit) editCollection(collectionEdit.dataset.editCollection);
     if (collectionDelete) removeRecord("collections", collectionDelete.dataset.deleteCollection).catch((error) => showToast(error.message, true));
     if (expenseEdit) editExpense(expenseEdit.dataset.editExpense);
@@ -3000,6 +3062,12 @@ function bindEvents() {
     if (salesReturnXlsx) window.location.href = `/api/sales-returns/${salesReturnXlsx.dataset.xlsxSalesReturn}.xlsx`;
     if (salesReturnPdf) printSalesReturn(salesReturnPdf.dataset.pdfSalesReturn);
     if (saveCustomerResponsibleButton) saveCustomerResponsible(saveCustomerResponsibleButton.dataset.saveCustomerResponsible).catch((error) => showToast(error.message, true));
+    if (openCustomerStatementButton) {
+      setActiveTab("customerStatement");
+      qs("#statementCustomer").value = openCustomerStatementButton.dataset.openCustomerStatement;
+      refreshSearchableSelect(qs("#statementCustomer"));
+      loadCustomerStatement().catch((error) => showToast(error.message,true));
+    }
   });
 }
 
