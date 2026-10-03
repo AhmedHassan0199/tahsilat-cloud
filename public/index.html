@@ -215,10 +215,14 @@
         <div class="page-action-tabs" role="tablist" aria-label="عرض العملاء"><button class="page-action-tab active" data-page-mode="entry" type="button">إضافة جديد</button><button class="page-action-tab" data-page-mode="display" type="button">عرض وإدارة السجلات</button></div>
         <div class="entry-layout">
           <form id="customerForm" class="form-panel" data-page-pane="entry">
-            <h2>إضافة عميل جديد</h2>
+            <h2 id="customerFormTitle">إضافة عميل جديد</h2>
+            <input type="hidden" name="id">
             <p class="muted section-note">أضف العميل مرة واحدة ليظهر في جميع التحصيلات وأوامر التوريد وأذونات التسليم والتقارير.</p>
             <label>اسم العميل<input name="name" required autocomplete="off"></label>
-            <div class="form-actions"><button type="submit">إضافة</button></div>
+            <label>عناية الأستاذ / جهة الاتصال<input name="contact_name" autocomplete="off"></label>
+            <label>رقم الموبايل<input name="mobile" autocomplete="off" inputmode="tel"></label>
+            <label class="wide">العنوان<input name="address" autocomplete="off"></label>
+            <div class="form-actions"><button type="submit">حفظ</button><button id="cancelCustomerEdit" class="secondary hidden" type="button">إلغاء التعديل</button></div>
           </form>
           <div class="panel" data-page-pane="display">
             <div class="panel-head customer-directory-head">
@@ -230,7 +234,7 @@
             </div>
             <div class="table-wrap records">
               <table>
-                <thead><tr><th>العميل</th><th>المسؤول</th><th>رصيد بداية المدة</th><th>الرصيد الحالي</th><th>تحصيلات الفترة</th><th>آخر تحصيل</th></tr></thead>
+                <thead><tr><th>العميل</th><th>بيانات الاتصال</th><th>المسؤول</th><th>رصيد بداية المدة</th><th>الرصيد الحالي</th><th>تحصيلات الفترة</th><th>آخر تحصيل</th><th></th></tr></thead>
                 <tbody id="customerRows"></tbody>
               </table>
             </div>
@@ -406,42 +410,17 @@
             <h2>كشف حساب عميل</h2>
             <div class="filters">
               <select id="statementCustomer"></select>
+              <input id="statementFrom" type="date" title="من تاريخ">
+              <input id="statementTo" type="date" title="إلى تاريخ">
               <button id="loadStatementBtn" type="button">عرض</button>
               <button id="exportStatementExcelBtn" type="button">Excel</button>
               <button id="exportStatementPdfBtn" type="button">PDF</button>
             </div>
           </div>
-          <section class="metrics statement-metrics">
-            <div class="metric"><span>رصيد بداية المدة</span><strong id="statementOpeningBalance">0</strong></div>
-            <div class="metric"><span>إجمالي الفواتير</span><strong id="statementInvoiceTotal">0</strong></div>
-            <div class="metric"><span>إجمالي التحصيلات</span><strong id="statementCollectionTotal">0</strong></div>
-            <div class="metric"><span>إجمالي المرتجعات</span><strong id="statementReturnTotal">0</strong></div>
-            <div class="metric accent"><span>المتبقي للتحصيل</span><strong id="statementRemaining">0</strong></div>
-          </section>
-          <p class="muted section-note">يبدأ كشف الحساب من <strong id="statementPeriodStart">2026-09-01</strong>. الحركات الأقدم محفوظة في صفحاتها للأرشيف ولا تظهر هنا.</p>
-          <div class="grid two">
-            <div>
-              <div class="panel-head"><h2>الفواتير المستحقة</h2></div>
-              <div class="table-wrap records">
-                <table>
-                  <thead><tr><th>رقم الفاتورة</th><th>التاريخ</th><th>إذن التسليم</th><th>الإجمالي</th><th>ملاحظة</th></tr></thead>
-                  <tbody id="statementInvoiceRows"></tbody>
-                </table>
-              </div>
-            </div>
-            <div>
-              <div class="panel-head"><h2>التحصيلات</h2></div>
-              <div class="table-wrap records">
-                <table>
-                  <thead><tr><th>رقم</th><th>التاريخ</th><th>المسؤول</th><th>النوع</th><th>المبلغ</th><th>الطريقة</th></tr></thead>
-                  <tbody id="statementCollectionRows"></tbody>
-                </table>
-              </div>
-            </div>
-            <div>
-              <div class="panel-head"><h2>المرتجعات / الإشعارات الدائنة</h2></div>
-              <div class="table-wrap records"><table><thead><tr><th>رقم</th><th>التاريخ</th><th>الفاتورة الأصلية</th><th>السبب</th><th>القيمة</th></tr></thead><tbody id="statementReturnRows"></tbody></table></div>
-            </div>
+          <div class="statement-document">
+            <div class="statement-heading"><div><strong>مطلوب من السادة / </strong><span id="statementCustomerName">-</span><br><strong>عناية الأستاذ / </strong><span id="statementContactName">-</span><br><strong>العنوان / </strong><span id="statementAddress">-</span></div><h2>كشف حساب عميل</h2><div><strong>التاريخ: </strong><span id="statementGeneratedDate">-</span><br><strong>موبايل: </strong><span id="statementMobile">-</span></div></div>
+            <p class="muted section-note">الفترة من <strong id="statementPeriodStart">2026-09-01</strong> إلى <strong id="statementPeriodEnd">-</strong></p>
+            <div class="table-wrap records"><table class="statement-ledger"><thead><tr><th>م</th><th>التاريخ</th><th>البيان</th><th>العدد / الكمية</th><th>السعر</th><th>قيمة توريدات</th><th>تحصيلات</th><th>الرصيد اليومي</th><th>ملاحظات</th></tr></thead><tbody id="statementLedgerRows"></tbody><tfoot><tr><th colspan="5">باقي الرصيد المستحق</th><th id="statementSupplyTotal">0</th><th id="statementCollectionTotal">0</th><th id="statementRemaining">0</th><th></th></tr><tr><th colspan="2">الإجمالي فقط</th><th id="statementBalanceWords" colspan="7">-</th></tr></tfoot></table></div>
           </div>
         </div>
       </section>

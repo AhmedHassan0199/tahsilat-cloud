@@ -69,6 +69,7 @@ async function handleApi(request, env, url) {
   if (/^\/api\/customers\/\d+\/responsible$/.test(url.pathname) && method === "PUT") {
     return updateCustomerResponsible(request, env, user, Number(url.pathname.split("/")[3]));
   }
+  if (/^\/api\/customers\/\d+$/.test(url.pathname) && method === "PUT") return updateCustomer(request, env, user, idFromPath(url.pathname));
   if (url.pathname === "/api/customer-statement" && method === "GET") return customerStatement(env, url);
   if (url.pathname === "/api/customer-statement.xlsx" && method === "GET") return customerStatementXlsx(env, url);
   if (url.pathname === "/api/receivables" && method === "GET") return receivables(env, user, url);
@@ -366,7 +367,7 @@ async function bootstrap(env, user) {
   const restricted = collector || planner || invoiceIssuer;
   const paymentMethods = (planner || invoiceIssuer) ? { results: [] } : await env.DB.prepare("SELECT id, name, note FROM payment_methods WHERE active = 1 ORDER BY name").all();
   const expenseAccounts = restricted ? { results: [] } : await env.DB.prepare("SELECT id, category, code, name FROM expense_accounts WHERE active = 1 ORDER BY category DESC, CAST(code AS INTEGER)").all().catch(() => ({ results: [] }));
-  const customers = planner ? { results: [] } : await env.DB.prepare("SELECT id, name, responsible FROM customers WHERE active = 1 ORDER BY name").all().catch(() => ({ results: [] }));
+  const customers = planner ? { results: [] } : await env.DB.prepare("SELECT id, name, responsible, contact_name, mobile, address FROM customers WHERE active = 1 ORDER BY name").all().catch(() => ({ results: [] }));
   const custodyHolders = (planner || invoiceIssuer) ? { results: [] } : await env.DB.prepare("SELECT id, name FROM custody_holders WHERE active = 1 ORDER BY name").all().catch(() => ({ results: [] }));
   const designs = planner ? { results: [] } : await env.DB.prepare("SELECT id, name FROM designs WHERE active = 1 ORDER BY name").all().catch(() => ({ results: [] }));
   const productSizes = planner ? { results: [] } : await env.DB.prepare("SELECT id, name FROM product_sizes WHERE active = 1 ORDER BY name").all().catch(() => ({ results: [] }));
@@ -669,7 +670,7 @@ async function listCollections(env, url) {
 
 async function listCustomers(env) {
   const result = await env.DB.prepare(
-    `SELECT customers.id, customers.name, customers.responsible, customers.active, customers.created_at,
+    `SELECT customers.id, customers.name, customers.contact_name, customers.mobile, customers.address, customers.responsible, customers.active, customers.created_at,
             COALESCE(opening.opening_balance, 0) AS opening_balance,
             COALESCE(period_invoices.total, 0) AS period_invoices,
             COALESCE(period_collections.total, 0) AS period_collections,
@@ -694,15 +695,34 @@ async function createCustomer(request, env, user) {
   const name = normalizeCustomerName(payload.name || "");
   if (!name) throw new HttpError("اسم العميل مطلوب", 400);
   const normalized = normalizedCustomerKey(name);
+  const contactName = String(payload.contact_name || "").trim() || null;
+  const mobile = String(payload.mobile || "").trim() || null;
+  const address = String(payload.address || "").trim() || null;
   const now = nowIso();
   const result = await env.DB.prepare(
-    `INSERT INTO customers(name, normalized_name, active, created_at, updated_at)
-     VALUES(?, ?, 1, ?, ?)
-     ON CONFLICT(normalized_name) DO UPDATE SET active=1, name=excluded.name, updated_at=excluded.updated_at`
-  ).bind(name, normalized, now, now).run();
+    `INSERT INTO customers(name, normalized_name, contact_name, mobile, address, active, created_at, updated_at)
+     VALUES(?, ?, ?, ?, ?, 1, ?, ?)
+     ON CONFLICT(normalized_name) DO UPDATE SET active=1, name=excluded.name, contact_name=COALESCE(excluded.contact_name,customers.contact_name),mobile=COALESCE(excluded.mobile,customers.mobile),address=COALESCE(excluded.address,customers.address),updated_at=excluded.updated_at`
+  ).bind(name, normalized, contactName, mobile, address, now, now).run();
   const customer = await env.DB.prepare("SELECT id, name FROM customers WHERE normalized_name = ?").bind(normalized).first();
-  await insertAudit(env, request, user, "INSERT", "customers", customer?.id || result.meta.last_row_id || null, null, { name, normalized_name: normalized });
+  await insertAudit(env, request, user, "INSERT", "customers", customer?.id || result.meta.last_row_id || null, null, { name, normalized_name: normalized, contact_name: contactName, mobile, address });
   return json({ id: customer?.id || result.meta.last_row_id, name });
+}
+
+async function updateCustomer(request, env, user, id) {
+  assertCanWrite(user);
+  const before = await env.DB.prepare("SELECT * FROM customers WHERE id=? AND active=1").bind(id).first();
+  if (!before) throw new HttpError("العميل غير موجود",404);
+  const payload = await readJson(request);
+  const name = normalizeCustomerName(payload.name || "");
+  if (!name) throw new HttpError("اسم العميل مطلوب",400);
+  const normalized = normalizedCustomerKey(name);
+  const data = { name, normalized_name: normalized, contact_name: String(payload.contact_name || "").trim() || null, mobile: String(payload.mobile || "").trim() || null, address: String(payload.address || "").trim() || null };
+  const duplicate = await env.DB.prepare("SELECT id FROM customers WHERE normalized_name=? AND id<>? AND active=1").bind(normalized,id).first();
+  if (duplicate) throw new HttpError("يوجد عميل آخر بنفس الاسم",409);
+  await env.DB.prepare("UPDATE customers SET name=?,normalized_name=?,contact_name=?,mobile=?,address=?,updated_at=? WHERE id=?").bind(data.name,data.normalized_name,data.contact_name,data.mobile,data.address,nowIso(),id).run();
+  await insertAudit(env,request,user,"UPDATE","customers",id,before,{...before,...data});
+  return json({ok:true,id});
 }
 
 async function updateCustomerResponsible(request, env, user, id) {
@@ -779,72 +799,95 @@ async function updateOpeningBalance(request, env, user, customerId) {
 
 async function customerStatement(env, url) {
   const customerId = Number(url.searchParams.get("customer_id") || 0) || null;
-  return json(await customerStatementData(env, customerId));
+  const from = parseDateValue(url.searchParams.get("date_from")) || ACCOUNTING_START_DATE;
+  const to = parseDateValue(url.searchParams.get("date_to")) || new Date().toISOString().slice(0,10);
+  return json(await customerStatementData(env, customerId, from, to));
 }
 
 async function customerStatementXlsx(env, url) {
   const customerId = Number(url.searchParams.get("customer_id") || 0) || null;
-  const data = await customerStatementData(env, customerId);
+  const from = parseDateValue(url.searchParams.get("date_from")) || ACCOUNTING_START_DATE;
+  const to = parseDateValue(url.searchParams.get("date_to")) || new Date().toISOString().slice(0,10);
+  const data = await customerStatementData(env, customerId, from, to);
   const rows = [];
   const addRow = (values, style = "normal", mergeAcross = 0) => rows.push({ values, style, mergeAcross });
-  addRow(["الشركة المصرية للأكواب والعبوات الورقية", "", "", "", "", ""], "brand", 3);
-  addRow(["كشف حساب"], "title", 6);
-  addRow(["العميل", data.customer.name, "بداية الفترة", data.period_start, "رصيد بداية المدة", data.totals.opening_balance], "meta");
-  addRow(["إجمالي الفواتير", data.totals.invoices, "إجمالي التحصيلات", data.totals.collections, "إجمالي المرتجعات", data.totals.returns], "total");
-  addRow(["المتبقي للتحصيل", data.totals.remaining, "", "", "", ""], "total");
-  addRow(["", "", "", "", "", ""], "normal");
-  addRow(["الفواتير"], "section", 6);
-  addRow(["رقم الفاتورة", "التاريخ", "إذن التسليم", "إجمالي الأصناف", "مصاريف النقل", "الإجمالي"], "header");
-  data.invoices.forEach((item) => addRow([item.id, item.invoice_date || "", item.delivery_note_id, item.subtotal || 0, item.delivery_charge || 0, item.total || 0]));
-  addRow(["", "", "", "", "", ""], "normal");
-  addRow(["التحصيلات"], "section", 6);
-  addRow(["رقم", "التاريخ", "المسؤول", "النوع", "الطريقة", "المبلغ"], "header");
-  data.collections.forEach((item) => addRow([item.id, item.entry_date || "", item.responsible || "", item.collection_type || "", item.payment_method || "", item.amount || 0]));
-  addRow(["", "", "", "", "", ""], "normal");
-  addRow(["المرتجعات / الإشعارات الدائنة"], "section", 6);
-  addRow(["رقم المرتجع", "التاريخ", "الفاتورة الأصلية", "السبب", "ملاحظة", "القيمة"], "header");
-  data.returns.forEach((item) => addRow([item.id, item.return_date || "", item.invoice_id, item.reason || "", item.note || "", item.total || 0]));
+  addRow(["الشركة المصرية للأكواب والعبوات الورقية", "", "", "", "", "", "", "", ""], "brand", 9);
+  addRow(["كشف حساب عميل"], "statementTitle", 9);
+  addRow(["التاريخ", data.generated_date, "", "", "مطلوب من السادة /", data.customer.name, "", "", ""], "statementInfo");
+  addRow(["موبايل", data.customer.mobile || "", "", "", "عناية الأستاذ /", data.customer.contact_name || "", "", "", ""], "statementInfo");
+  addRow(["الفترة", `${data.date_from} إلى ${data.date_to}`, "", "", "العنوان /", data.customer.address || "", "", "", ""], "statementInfo");
+  addRow(["", "", "", "", "", "", "", "", ""], "statementInfo");
+  addRow(["م", "التاريخ", "البيان", "العدد / الكمية", "السعر", "قيمة توريدات", "تحصيلات", "الرصيد اليومي", "ملاحظات"], "statementHeader");
+  data.ledger.forEach((item,index) => addRow([index+1,item.date || "",item.description,item.quantity || "",item.unit_price ?? "",item.supply_value || "",item.collection_value || "",item.balance,item.note || ""], "statementRow"));
+  addRow(["", "", "باقي الرصيد المستحق", "", "", data.totals.net_supplies, data.totals.collections, data.totals.remaining, ""], "statementTotal");
+  addRow(["", "الإجمالي فقط", data.balance_words, "", "", "", "", "", ""], "statementWords");
   const prepared = normalizeSheetRows(rows);
   const file = reportXlsx(`كشف حساب ${data.customer.name}`, prepared.rows, prepared.merges, {
     brandLogo: await xlsxBrandLogo(env),
-    logoColumn: 4,
+    logoColumn: 7,
+    statementLayout: true,
   });
   return xlsxDownload(file, `customer-statement-${data.customer.id}.xlsx`);
 }
 
-async function customerStatementData(env, customerId) {
+async function customerStatementData(env, customerId, dateFrom = ACCOUNTING_START_DATE, dateTo = new Date().toISOString().slice(0,10)) {
   if (!customerId) throw new HttpError("العميل مطلوب", 400);
+  if (dateFrom < ACCOUNTING_START_DATE) dateFrom = ACCOUNTING_START_DATE;
+  if (dateTo < dateFrom) throw new HttpError("تاريخ النهاية يجب أن يساوي أو يلي تاريخ البداية",400);
   const customer = await env.DB.prepare(
-    `SELECT customers.id, customers.name, COALESCE(opening.opening_balance, 0) AS opening_balance
+    `SELECT customers.id, customers.name, customers.contact_name, customers.mobile, customers.address, COALESCE(opening.opening_balance, 0) AS opening_balance
      FROM customers
      LEFT JOIN customer_opening_balances opening ON opening.customer_id=customers.id AND opening.effective_date=? AND opening.is_set=1
      WHERE customers.id=? AND customers.active=1`
   ).bind(ACCOUNTING_START_DATE, customerId).first();
   if (!customer) throw new HttpError("العميل غير صحيح", 400);
-  const invoices = await env.DB.prepare(
-    `SELECT id, invoice_date, delivery_note_id, subtotal, delivery_charge, total, note, created_at
-     FROM invoices
-     WHERE customer_id = ? AND invoice_date >= ?
-     ORDER BY COALESCE(invoice_date, '') DESC, id DESC`
-  ).bind(customerId, ACCOUNTING_START_DATE).all();
+  const before = await env.DB.prepare(
+    `SELECT ?
+       + COALESCE((SELECT SUM(total) FROM invoices WHERE customer_id=? AND invoice_date>=? AND invoice_date<?),0)
+       - COALESCE((SELECT SUM(amount) FROM collections WHERE customer_id=? AND entry_date>=? AND entry_date<?),0)
+       - COALESCE((SELECT SUM(total) FROM sales_returns WHERE customer_id=? AND return_date>=? AND return_date<?),0) AS balance`
+  ).bind(Number(customer.opening_balance || 0),customerId,ACCOUNTING_START_DATE,dateFrom,customerId,ACCOUNTING_START_DATE,dateFrom,customerId,ACCOUNTING_START_DATE,dateFrom).first();
+  const invoices = await env.DB.prepare(`SELECT id,invoice_date,delivery_note_id,subtotal,serial_total,delivery_charge,total,note,created_at FROM invoices WHERE customer_id=? AND invoice_date>=? AND invoice_date<=? ORDER BY invoice_date,created_at,id`).bind(customerId,dateFrom,dateTo).all();
+  const invoiceItems = await env.DB.prepare(`SELECT invoice_items.*,invoices.invoice_date,invoices.delivery_note_id,invoices.note AS invoice_note,invoices.created_at AS invoice_created_at FROM invoice_items JOIN invoices ON invoices.id=invoice_items.invoice_id WHERE invoices.customer_id=? AND invoices.invoice_date>=? AND invoices.invoice_date<=? ORDER BY invoices.invoice_date,invoices.created_at,invoices.id,invoice_items.line_no`).bind(customerId,dateFrom,dateTo).all();
   const collections = await env.DB.prepare(
     `SELECT id, entry_date, responsible, collection_type, amount, payment_method, note, created_at
      FROM collections
-     WHERE customer_id = ? AND entry_date >= ?
-     ORDER BY COALESCE(entry_date, '') DESC, id DESC`
-  ).bind(customerId, ACCOUNTING_START_DATE).all();
+     WHERE customer_id = ? AND entry_date >= ? AND entry_date <= ?
+     ORDER BY entry_date,created_at,id`
+  ).bind(customerId, dateFrom,dateTo).all();
   const returns = await env.DB.prepare(
     `SELECT id, return_date, invoice_id, reason, items_total, serial_refund, delivery_refund, total, note, created_at
      FROM sales_returns
-     WHERE customer_id = ? AND return_date >= ?
-     ORDER BY return_date DESC, id DESC`
-  ).bind(customerId, ACCOUNTING_START_DATE).all();
+     WHERE customer_id = ? AND return_date >= ? AND return_date <= ?
+     ORDER BY return_date,created_at,id`
+  ).bind(customerId,dateFrom,dateTo).all();
+  const returnItems = await env.DB.prepare(`SELECT sales_return_items.*,sales_returns.return_date,sales_returns.invoice_id,sales_returns.reason,sales_returns.note AS return_note,sales_returns.created_at AS return_created_at FROM sales_return_items JOIN sales_returns ON sales_returns.id=sales_return_items.return_id WHERE sales_returns.customer_id=? AND sales_returns.return_date>=? AND sales_returns.return_date<=? ORDER BY sales_returns.return_date,sales_returns.created_at,sales_returns.id,sales_return_items.line_no`).bind(customerId,dateFrom,dateTo).all();
+  const events = [{kind:"opening",date:dateFrom,created_at:"",id:0,order:0,description:dateFrom===ACCOUNTING_START_DATE?"رصيد أول المدة":"رصيد سابق للفترة",quantity:"",unit_price:null,supply_value:0,collection_value:0,note:""}];
+  const invoiceItemTotals = new Map();
+  invoiceItems.results.forEach((item) => events.push({kind:"invoice",date:item.invoice_date,created_at:item.invoice_created_at,id:item.invoice_id,order:item.line_no,description:`فاتورة #${item.invoice_id} — ${item.product_type}${item.design_name?` — ${item.design_name}`:""}${item.size_name?` — ${item.size_name}`:""}`,quantity:`${item.quantity_amount} ${item.quantity_unit || ""}`,unit_price:Number(item.unit_price||0),supply_value:Number(item.line_total||0),collection_value:0,note:item.invoice_note||""}));
+  invoiceItems.results.forEach((item)=>invoiceItemTotals.set(String(item.invoice_id),Number(invoiceItemTotals.get(String(item.invoice_id))||0)+Number(item.line_total||0)));
+  invoices.results.forEach((invoice) => {
+    if(Number(invoice.serial_total||0)>0) events.push({kind:"invoice",date:invoice.invoice_date,created_at:invoice.created_at,id:invoice.id,order:9001,description:`قيمة السريل — فاتورة #${invoice.id}`,quantity:"",unit_price:null,supply_value:Number(invoice.serial_total),collection_value:0,note:""});
+    if(Number(invoice.delivery_charge||0)>0) events.push({kind:"invoice",date:invoice.invoice_date,created_at:invoice.created_at,id:invoice.id,order:9002,description:`مصاريف نقل — فاتورة #${invoice.id}`,quantity:"",unit_price:null,supply_value:Number(invoice.delivery_charge),collection_value:0,note:""});
+    const residual=currencyValue(Number(invoice.total||0)-Number(invoiceItemTotals.get(String(invoice.id))||0)-Number(invoice.serial_total||0)-Number(invoice.delivery_charge||0));
+    if(Math.abs(residual)>0.004) events.push({kind:"invoice",date:invoice.invoice_date,created_at:invoice.created_at,id:invoice.id,order:9003,description:`فاتورة #${invoice.id} — قيمة مسجلة`,quantity:"",unit_price:null,supply_value:residual,collection_value:0,note:invoice.note||""});
+  });
+  collections.results.forEach((item) => events.push({kind:"collection",date:item.entry_date,created_at:item.created_at,id:item.id,order:0,description:`تحصيل #${item.id}${item.payment_method?` — ${item.payment_method}`:""}`,quantity:"",unit_price:null,supply_value:0,collection_value:Number(item.amount||0),note:item.note||item.collection_type||""}));
+  returnItems.results.forEach((item) => events.push({kind:"return",date:item.return_date,created_at:item.return_created_at,id:item.return_id,order:item.line_no,description:`مرتجع فاتورة #${item.invoice_id} — ${item.product_type}${item.design_name?` — ${item.design_name}`:""}`,quantity:`${item.quantity_amount} ${item.quantity_unit || ""}`,unit_price:Number(item.unit_price||0),supply_value:-Number(item.line_total||0),collection_value:0,note:item.reason||item.return_note||""}));
+  returns.results.forEach((item) => {
+    if(Number(item.serial_refund||0)>0) events.push({kind:"return",date:item.return_date,created_at:item.created_at,id:item.id,order:9001,description:`رد قيمة السريل — مرتجع #${item.id}`,quantity:"",unit_price:null,supply_value:-Number(item.serial_refund),collection_value:0,note:item.reason||""});
+    if(Number(item.delivery_refund||0)>0) events.push({kind:"return",date:item.return_date,created_at:item.created_at,id:item.id,order:9002,description:`رد مصاريف النقل — مرتجع #${item.id}`,quantity:"",unit_price:null,supply_value:-Number(item.delivery_refund),collection_value:0,note:item.reason||""});
+  });
+  const rank={opening:0,invoice:1,return:2,collection:3};
+  events.sort((a,b)=>String(a.date).localeCompare(String(b.date))||String(a.created_at).localeCompare(String(b.created_at))||(rank[a.kind]-rank[b.kind])||(a.id-b.id)||(a.order-b.order));
+  let running=currencyValue(before?.balance||0);
+  const ledger=events.map((event,index)=>{if(index>0) running=currencyValue(running+Number(event.supply_value||0)-Number(event.collection_value||0)); return {...event,balance:running};});
   const totalInvoices = invoices.results.reduce((sum, item) => sum + Number(item.total || 0), 0);
   const totalCollections = collections.results.reduce((sum, item) => sum + Number(item.amount || 0), 0);
   const totalReturns = returns.results.reduce((sum, item) => sum + Number(item.total || 0), 0);
   return {
     customer,
-    period_start: ACCOUNTING_START_DATE,
+    period_start: ACCOUNTING_START_DATE,date_from:dateFrom,date_to:dateTo,generated_date:new Date().toISOString().slice(0,10),ledger,
     invoices: invoices.results,
     collections: collections.results,
     returns: returns.results,
@@ -853,8 +896,10 @@ async function customerStatementData(env, customerId) {
       invoices: totalInvoices,
       collections: totalCollections,
       returns: totalReturns,
-      remaining: Number(customer.opening_balance || 0) + totalInvoices - totalCollections - totalReturns,
+      net_supplies:currencyValue(totalInvoices-totalReturns),
+      remaining: running,
     },
+    balance_words: arabicCurrencyWords(running),
   };
 }
 
@@ -1600,6 +1645,29 @@ function accountingEventCompare(left, right) {
 
 function currencyValue(value) {
   return Math.round((Number(value || 0) + Number.EPSILON) * 100) / 100;
+}
+
+function arabicIntegerWords(value) {
+  const n=Math.floor(Math.abs(Number(value)||0));
+  if(n===0) return "صفر";
+  const ones=["","واحد","اثنان","ثلاثة","أربعة","خمسة","ستة","سبعة","ثمانية","تسعة","عشرة","أحد عشر","اثنا عشر","ثلاثة عشر","أربعة عشر","خمسة عشر","ستة عشر","سبعة عشر","ثمانية عشر","تسعة عشر"];
+  const tens=["","","عشرون","ثلاثون","أربعون","خمسون","ستون","سبعون","ثمانون","تسعون"];
+  const hundreds=["","مائة","مائتان","ثلاثمائة","أربعمائة","خمسمائة","ستمائة","سبعمائة","ثمانمائة","تسعمائة"];
+  const under1000=(x)=>{const parts=[];const h=Math.floor(x/100);const r=x%100;if(h)parts.push(hundreds[h]);if(r){if(r<20)parts.push(ones[r]);else{const o=r%10;if(o)parts.push(ones[o]);parts.push(tens[Math.floor(r/10)]);}}return parts.join(" و");};
+  const groups=[[1000000000,"مليار","ملياران","مليارات"],[1000000,"مليون","مليونان","ملايين"],[1000,"ألف","ألفان","آلاف"]];
+  let remaining=n;const parts=[];
+  for(const [size,singular,dual,plural] of groups){const count=Math.floor(remaining/size);if(!count)continue;remaining%=size;if(count===1)parts.push(singular);else if(count===2)parts.push(dual);else if(count>=3&&count<=10)parts.push(`${under1000(count)} ${plural}`);else parts.push(`${under1000(count)} ${singular}`);}
+  if(remaining)parts.push(under1000(remaining));
+  return parts.join(" و");
+}
+
+function arabicCurrencyWords(value) {
+  const amount=currencyValue(value);const absolute=Math.abs(amount);const pounds=Math.floor(absolute);const piastres=Math.round((absolute-pounds)*100);
+  let words=`${arabicIntegerWords(pounds)} جنيهًا مصريًا`;
+  if(piastres)words+=` و${arabicIntegerWords(piastres)} قرشًا`;
+  if(amount<0) return `رصيد دائن لصالح العميل: ${words} لا غير`;
+  if(amount===0) return "الحساب متعادل — صفر جنيه مصري لا غير";
+  return `${words} لا غير`;
 }
 
 async function addInvoiceBalances(env, requestedInvoices) {
@@ -2646,7 +2714,7 @@ function reportXlsx(title, rows, merges, options = {}) {
     "xl/workbook.xml": workbookXml(title),
     "xl/_rels/workbook.xml.rels": workbookRelsXml(),
     "xl/styles.xml": workbookStylesXml(),
-    "xl/worksheets/sheet1.xml": worksheetXml(rows, merges, branded),
+    "xl/worksheets/sheet1.xml": worksheetXml(rows, merges, branded, options),
   };
   if (branded) {
     files["xl/media/image1.png"] = options.brandLogo;
@@ -2763,23 +2831,29 @@ function expenseSheetRows(data) {
   return { rows, merges };
 }
 
-function worksheetXml(rows, merges, branded = false) {
-  const styleIds = { normal: 0, title: 1, section: 2, header: 3, meta: 4, total: 5, brand: 6 };
+function worksheetXml(rows, merges, branded = false, options = {}) {
+  const styleIds = { normal: 0, title: 1, section: 2, header: 3, meta: 4, total: 5, brand: 6, statementTitle:7, statementInfo:8, statementHeader:9, statementRow:10, statementTotal:11, statementWords:12 };
+  const columns=options.statementLayout
+    ? '<col min="1" max="1" width="7" customWidth="1"/><col min="2" max="2" width="14" customWidth="1"/><col min="3" max="3" width="42" customWidth="1"/><col min="4" max="4" width="18" customWidth="1"/><col min="5" max="8" width="16" customWidth="1"/><col min="9" max="9" width="28" customWidth="1"/>'
+    : '<col min="1" max="1" width="22" customWidth="1"/><col min="2" max="2" width="34" customWidth="1"/><col min="3" max="3" width="20" customWidth="1"/><col min="4" max="4" width="18" customWidth="1"/><col min="5" max="5" width="18" customWidth="1"/><col min="6" max="6" width="18" customWidth="1"/>';
   return `<?xml version="1.0" encoding="UTF-8"?>
 <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
-  <sheetViews><sheetView rightToLeft="1" workbookViewId="0"/></sheetViews>
-  <cols><col min="1" max="1" width="22" customWidth="1"/><col min="2" max="2" width="34" customWidth="1"/><col min="3" max="3" width="20" customWidth="1"/><col min="4" max="4" width="18" customWidth="1"/><col min="5" max="5" width="18" customWidth="1"/><col min="6" max="6" width="18" customWidth="1"/></cols>
+  <sheetPr>${options.statementLayout?'<pageSetUpPr fitToPage="1"/>':''}</sheetPr>
+  <sheetViews><sheetView rightToLeft="1" showGridLines="0" workbookViewId="0"/></sheetViews>
+  <cols>${columns}</cols>
   <sheetData>
 ${rows.map((row, index) => xlsxRow(row, index + 1, styleIds[row.style] ?? 0)).join("\n")}
   </sheetData>
   ${merges.length ? `<mergeCells count="${merges.length}">${merges.map((ref) => `<mergeCell ref="${ref}"/>`).join("")}</mergeCells>` : ""}
   <pageMargins left="0.7" right="0.7" top="0.75" bottom="0.75" header="0.3" footer="0.3"/>
+  ${options.statementLayout?'<pageSetup orientation="landscape" paperSize="9" fitToWidth="1" fitToHeight="0"/>':''}
   ${branded ? '<drawing r:id="rId1"/>' : ""}
 </worksheet>`;
 }
 
 function xlsxRow(row, rowNumber, styleId) {
-  const height = row.style === "brand" ? ' ht="62" customHeight="1"' : "";
+  const heights={brand:62,statementTitle:30,statementHeader:28,statementRow:23,statementTotal:26,statementWords:30};
+  const height = heights[row.style] ? ` ht="${heights[row.style]}" customHeight="1"` : "";
   return `    <row r="${rowNumber}"${height}>${row.values.map((value, index) => xlsxCell(value, `${columnName(index + 1)}${rowNumber}`, styleId)).join("")}</row>`;
 }
 
@@ -2849,7 +2923,7 @@ function workbookStylesXml() {
   <fills count="5"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FFD9EAF7"/><bgColor indexed="64"/></patternFill></fill><fill><patternFill patternType="solid"><fgColor rgb="FFE2F0D9"/><bgColor indexed="64"/></patternFill></fill><fill><patternFill patternType="solid"><fgColor rgb="FFFFF2CC"/><bgColor indexed="64"/></patternFill></fill></fills>
   <borders count="2"><border><left/><right/><top/><bottom/><diagonal/></border><border><left style="thin"><color rgb="FFA6A6A6"/></left><right style="thin"><color rgb="FFA6A6A6"/></right><top style="thin"><color rgb="FFA6A6A6"/></top><bottom style="thin"><color rgb="FFA6A6A6"/></bottom><diagonal/></border></borders>
   <cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>
-  <cellXfs count="7">
+  <cellXfs count="13">
     <xf numFmtId="0" fontId="0" fillId="0" borderId="1" xfId="0" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>
     <xf numFmtId="0" fontId="1" fillId="2" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>
     <xf numFmtId="0" fontId="2" fillId="3" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>
@@ -2857,6 +2931,12 @@ function workbookStylesXml() {
     <xf numFmtId="0" fontId="2" fillId="0" borderId="1" xfId="0" applyFont="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>
     <xf numFmtId="0" fontId="2" fillId="4" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>
     <xf numFmtId="0" fontId="3" fillId="0" borderId="0" xfId="0" applyFont="1" applyAlignment="1"><alignment horizontal="right" vertical="center" wrapText="1"/></xf>
+    <xf numFmtId="0" fontId="1" fillId="0" borderId="0" xfId="0" applyFont="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>
+    <xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0" applyAlignment="1"><alignment horizontal="right" vertical="center" wrapText="1"/></xf>
+    <xf numFmtId="4" fontId="2" fillId="4" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center" wrapText="1"/></xf>
+    <xf numFmtId="4" fontId="0" fillId="0" borderId="1" xfId="0" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center" wrapText="1"/></xf>
+    <xf numFmtId="4" fontId="2" fillId="4" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center" wrapText="1"/></xf>
+    <xf numFmtId="0" fontId="2" fillId="4" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center" wrapText="1"/></xf>
   </cellXfs>
   <cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>
 </styleSheet>`;

@@ -1415,3 +1415,4 @@ label.check input {
   }
 }
 .credit-value { color: #15803d; }
+.statement-document{direction:rtl;margin-top:18px}.statement-heading{display:grid;grid-template-columns:1fr auto 1fr;gap:24px;align-items:center;padding:16px 4px}.statement-heading h2{text-decoration:underline;text-align:center}.statement-heading>div:last-child{text-align:left}.statement-ledger th,.statement-ledger td{text-align:center;border:1px solid #202020}.statement-ledger thead th,.statement-ledger tfoot th{background:#fff600;color:#111;font-weight:800}.statement-ledger td:nth-child(3),.statement-ledger td:last-child{text-align:right}.statement-ledger tfoot th{font-size:1.02rem}@media(max-width:800px){.statement-heading{grid-template-columns:1fr}.statement-heading>div:last-child{text-align:right}}

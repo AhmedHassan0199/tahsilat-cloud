@@ -1114,13 +1114,15 @@ function renderCustomers() {
   body.innerHTML = customers.map((item) => `
     <tr>
       <td data-label="العميل">${escapeHtml(item.name)}</td>
+      <td data-label="بيانات الاتصال">${escapeHtml(item.contact_name || "-")}<br><small>${escapeHtml(item.mobile || "-")}</small><br><small>${escapeHtml(item.address || "-")}</small></td>
       <td data-label="المسؤول">${isAdmin() ? `<select data-customer-responsible-select="${item.id}"><option value="">غير محدد</option>${state.responsibles.map((name) => `<option value="${escapeHtml(name)}" ${item.responsible === name ? "selected" : ""}>${escapeHtml(name)}</option>`).join("")}</select><button type="button" data-save-customer-responsible="${item.id}">حفظ</button>` : escapeHtml(item.responsible || "غير محدد")}</td>
       <td data-label="رصيد بداية المدة">${money(item.opening_balance)}</td>
       <td data-label="الرصيد الحالي">${money(item.current_balance)}</td>
       <td data-label="تحصيلات الفترة">${money(item.period_collections)}</td>
       <td data-label="آخر تحصيل">${escapeHtml(item.last_collection_date || "-")}</td>
+      <td class="actions">${isAdmin()?`<button type="button" data-edit-customer="${item.id}">تعديل البيانات</button>`:""}</td>
     </tr>
-  `).join("") || `<tr><td colspan="6" class="muted">${query ? "لا يوجد عميل مطابق للبحث" : "لا توجد بيانات عملاء"}</td></tr>`;
+  `).join("") || `<tr><td colspan="8" class="muted">${query ? "لا يوجد عميل مطابق للبحث" : "لا توجد بيانات عملاء"}</td></tr>`;
   qsa("select[data-customer-responsible-select]", body).forEach(enhanceSearchableSelect);
 }
 
@@ -1415,46 +1417,11 @@ function renderCollectionReport() {
 
 function renderCustomerStatement() {
   const data = state.customerStatement;
-  qs("#statementOpeningBalance").textContent = money(data?.totals?.opening_balance || 0);
-  qs("#statementInvoiceTotal").textContent = money(data?.totals?.invoices || 0);
-  qs("#statementCollectionTotal").textContent = money(data?.totals?.collections || 0);
-  qs("#statementReturnTotal").textContent = money(data?.totals?.returns || 0);
+  qs("#statementCustomerName").textContent=data?.customer?.name||"-";qs("#statementContactName").textContent=data?.customer?.contact_name||"-";qs("#statementMobile").textContent=data?.customer?.mobile||"-";qs("#statementAddress").textContent=data?.customer?.address||"-";qs("#statementGeneratedDate").textContent=data?.generated_date||"-";
+  qs("#statementSupplyTotal").textContent=money(data?.totals?.net_supplies||0);qs("#statementCollectionTotal").textContent=money(data?.totals?.collections||0);
   qs("#statementRemaining").textContent = money(data?.totals?.remaining || 0);
-  qs("#statementPeriodStart").textContent = data?.period_start || state.accountingStartDate;
-
-  const invoiceBody = qs("#statementInvoiceRows");
-  if (invoiceBody) {
-    const rows = data?.invoices || [];
-    invoiceBody.innerHTML = rows.map((item) => `
-      <tr>
-        <td data-label="رقم الفاتورة">#${item.id}</td>
-        <td data-label="التاريخ">${item.invoice_date || "-"}</td>
-        <td data-label="إذن التسليم">#${item.delivery_note_id}</td>
-        <td data-label="الإجمالي">${money(item.total)}</td>
-        <td data-label="ملاحظة">${item.note || "-"}</td>
-      </tr>
-    `).join("") || `<tr><td colspan="5" class="muted">لا توجد فواتير لهذا العميل</td></tr>`;
-  }
-
-  const collectionBody = qs("#statementCollectionRows");
-  if (collectionBody) {
-    const rows = data?.collections || [];
-    collectionBody.innerHTML = rows.map((item) => `
-      <tr>
-        <td data-label="رقم">#${item.id}</td>
-        <td data-label="التاريخ">${item.entry_date || "-"}</td>
-        <td data-label="المسؤول">${item.responsible || "-"}</td>
-        <td data-label="النوع">${item.collection_type || "-"}</td>
-        <td data-label="المبلغ">${money(item.amount)}</td>
-        <td data-label="الطريقة">${item.payment_method || "-"}</td>
-      </tr>
-    `).join("") || `<tr><td colspan="6" class="muted">لا توجد تحصيلات لهذا العميل</td></tr>`;
-  }
-  const returnBody = qs("#statementReturnRows");
-  if (returnBody) {
-    const rows = data?.returns || [];
-    returnBody.innerHTML = rows.map((item) => `<tr><td data-label="رقم">#${item.id}</td><td data-label="التاريخ">${item.return_date || "-"}</td><td data-label="الفاتورة الأصلية">#${item.invoice_id}</td><td data-label="السبب">${escapeHtml(item.reason || "-")}</td><td data-label="القيمة">${money(item.total)}</td></tr>`).join("") || `<tr><td colspan="5" class="muted">لا توجد مرتجعات لهذا العميل</td></tr>`;
-  }
+  qs("#statementPeriodStart").textContent=data?.date_from||state.accountingStartDate;qs("#statementPeriodEnd").textContent=data?.date_to||"-";qs("#statementBalanceWords").textContent=data?.balance_words||"-";
+  const rows=data?.ledger||[];qs("#statementLedgerRows").innerHTML=rows.map((item,index)=>`<tr><td>${index+1}</td><td>${item.date||"-"}</td><td>${escapeHtml(item.description||"")}</td><td>${escapeHtml(item.quantity||"")}</td><td>${item.unit_price==null?"":money(item.unit_price)}</td><td>${item.supply_value?money(item.supply_value):""}</td><td>${item.collection_value?money(item.collection_value):""}</td><td>${money(item.balance)}</td><td>${escapeHtml(item.note||"")}</td></tr>`).join("")||`<tr><td colspan="9" class="muted">لا توجد حركات في هذه الفترة</td></tr>`;
 }
 
 function receivablesParams() {
@@ -1544,6 +1511,13 @@ function printDocument(title, blocks, options = {}) {
     if (block.type === "totals") {
       return `<dl class="totals">${block.rows.map(([label, value]) => `<div><dt>${escapeHtml(label)}</dt><dd>${escapeHtml(value)}</dd></div>`).join("")}</dl>`;
     }
+    if (block.type === "statement") {
+      return `<section class="printed-statement">
+        <div class="statement-info"><div><strong>مطلوب من السادة / </strong>${escapeHtml(block.customer.name || "-")}<br><strong>عناية الأستاذ / </strong>${escapeHtml(block.customer.contact_name || "-")}<br><strong>العنوان / </strong>${escapeHtml(block.customer.address || "-")}</div><div><strong>التاريخ: </strong>${escapeHtml(block.generatedDate || "-")}<br><strong>موبايل: </strong>${escapeHtml(block.customer.mobile || "-")}</div></div>
+        <p class="statement-period">الفترة من ${escapeHtml(block.dateFrom)} إلى ${escapeHtml(block.dateTo)}</p>
+        <table class="statement-table"><thead><tr>${block.headers.map((head) => `<th>${escapeHtml(head)}</th>`).join("")}</tr></thead><tbody>${block.rows.map((row) => `<tr>${row.map((cell) => `<td>${escapeHtml(cell)}</td>`).join("")}</tr>`).join("") || `<tr><td colspan="9">لا توجد حركات في هذه الفترة</td></tr>`}</tbody><tfoot><tr><th colspan="5">باقي الرصيد المستحق</th><th>${escapeHtml(block.supplyTotal)}</th><th>${escapeHtml(block.collectionTotal)}</th><th>${escapeHtml(block.remaining)}</th><th></th></tr><tr><th colspan="2">الإجمالي فقط</th><th colspan="7">${escapeHtml(block.balanceWords)}</th></tr></tfoot></table>
+      </section>`;
+    }
     return "";
   }).join("");
   const brandedHeader = options.branded ? `
@@ -1565,7 +1539,9 @@ function printDocument(title, blocks, options = {}) {
     .document-brand{direction:rtl;display:grid;grid-template-columns:1fr 1fr 1fr;align-items:center;gap:16px;border-bottom:2px solid #2f9e44;padding:0 0 12px;margin:0 0 14px}
     .company-name{font-size:19px;font-weight:700;line-height:1.6;text-align:right}
     .document-logo{display:block;width:105px;height:82px;object-fit:contain;justify-self:end}
-    @media print{button{display:none} body{margin:10mm}}
+    .statement-info{display:flex;justify-content:space-between;gap:30px;line-height:2;margin:0 0 8px}.statement-period{text-align:center;font-weight:bold}
+    .statement-table{direction:rtl}.statement-table th,.statement-table td{border:1px solid #111;padding:6px}.statement-table thead th,.statement-table tfoot th{background:#fff600;color:#111;font-weight:700}.statement-table tbody td{height:24px}
+    @media print{button{display:none} body{margin:8mm}@page{size:A4 landscape;margin:8mm}}
   </style></head><body>${brandedHeader}<h1>${escapeHtml(title)}</h1>${content}<script>window.onload=()=>setTimeout(()=>window.print(),250)</script></body></html>`);
   win.document.close();
 }
@@ -1622,10 +1598,10 @@ function printCustomerStatement() {
   const data = state.customerStatement;
   if (!data) throw new Error("اعرض كشف الحساب أولا");
   printDocument(`كشف حساب ${data.customer.name}`, [
-    { type: "totals", rows: [["بداية الفترة", data.period_start], ["رصيد بداية المدة", money(data.totals.opening_balance)], ["إجمالي الفواتير", money(data.totals.invoices)], ["إجمالي التحصيلات", money(data.totals.collections)], ["إجمالي المرتجعات", money(data.totals.returns)], ["المتبقي للتحصيل", money(data.totals.remaining)]] },
-    { type: "table", title: "الفواتير", headers: ["رقم", "التاريخ", "إذن التسليم", "الإجمالي", "ملاحظة"], rows: data.invoices.map((item) => [`#${item.id}`, item.invoice_date || "-", `#${item.delivery_note_id}`, money(item.total), item.note || "-"]) },
-    { type: "table", title: "التحصيلات", headers: ["رقم", "التاريخ", "المسؤول", "النوع", "المبلغ", "الطريقة"], rows: data.collections.map((item) => [`#${item.id}`, item.entry_date || "-", item.responsible || "-", item.collection_type || "-", money(item.amount), item.payment_method || "-"]) },
-    { type: "table", title: "المرتجعات / الإشعارات الدائنة", headers: ["رقم", "التاريخ", "الفاتورة الأصلية", "السبب", "القيمة"], rows: data.returns.map((item) => [`#${item.id}`, item.return_date || "-", `#${item.invoice_id}`, item.reason || "-", money(item.total)]) },
+    { type: "statement", customer: data.customer, generatedDate: data.generated_date, dateFrom: data.date_from, dateTo: data.date_to,
+      headers: ["م", "التاريخ", "البيان", "العدد / الكمية", "السعر", "قيمة توريدات", "تحصيلات", "الرصيد اليومي", "ملاحظات"],
+      rows: (data.ledger || []).map((item, index) => [index + 1, item.date || "-", item.description || "", item.quantity || "", item.unit_price == null ? "" : money(item.unit_price), item.supply_value ? money(item.supply_value) : "", item.collection_value ? money(item.collection_value) : "", money(item.balance), item.note || ""]),
+      supplyTotal: money(data.totals.net_supplies), collectionTotal: money(data.totals.collections), remaining: money(data.totals.remaining), balanceWords: data.balance_words || "-" },
   ], { branded: true });
 }
 
@@ -1806,8 +1782,20 @@ async function loadCollectionReport() {
 async function loadCustomerStatement() {
   const customerId = qs("#statementCustomer")?.value;
   if (!customerId) throw new Error("اختر العميل أولا");
-  state.customerStatement = await api(`/api/customer-statement?customer_id=${encodeURIComponent(customerId)}`);
+  const params = statementParams();
+  state.customerStatement = await api(`/api/customer-statement?${params.toString()}`);
   renderCustomerStatement();
+}
+
+function statementParams() {
+  const customerId = qs("#statementCustomer")?.value;
+  const params = new URLSearchParams();
+  if (customerId) params.set("customer_id", customerId);
+  const from = qs("#statementFrom")?.value;
+  const to = qs("#statementTo")?.value;
+  if (from) params.set("date_from", from);
+  if (to) params.set("date_to", to);
+  return params;
 }
 
 function collectionReportParams() {
@@ -2118,11 +2106,16 @@ async function saveCollection(event) {
 async function saveCustomer(event) {
   event.preventDefault();
   const form = event.currentTarget;
-  await api("/api/customers", { method: "POST", body: JSON.stringify(formData(form)) });
-  form.reset();
-  showToast("تم إضافة العميل");
+  const data=formData(form);const id=data.id;
+  await api(id?`/api/customers/${id}`:"/api/customers", { method:id?"PUT":"POST", body: JSON.stringify(data) });
+  resetCustomerForm();
+  showToast(id?"تم تحديث بيانات العميل":"تم إضافة العميل");
   await Promise.all([loadBootstrap(), loadCustomers(), loadAudit()]);
 }
+
+function resetCustomerForm(){const form=qs("#customerForm");form.reset();form.elements.id.value="";qs("#customerFormTitle").textContent="إضافة عميل جديد";qs("#cancelCustomerEdit").classList.add("hidden");}
+
+function editCustomer(id){const item=state.customers.find((row)=>String(row.id)===String(id));if(!item)return;setPageMode("customers","entry");const form=qs("#customerForm");form.elements.id.value=item.id;form.name.value=item.name||"";form.contact_name.value=item.contact_name||"";form.mobile.value=item.mobile||"";form.address.value=item.address||"";qs("#customerFormTitle").textContent=`تعديل بيانات ${item.name}`;qs("#cancelCustomerEdit").classList.remove("hidden");form.scrollIntoView({behavior:"smooth",block:"start"});}
 
 function resetOpeningBalanceForm() {
   const form = qs("#openingBalanceForm");
@@ -2817,7 +2810,7 @@ function bindEvents() {
   qs("#exportStatementExcelBtn").addEventListener("click", () => {
     const customerId = qs("#statementCustomer")?.value;
     if (!customerId) return showToast("اختر العميل أولا", true);
-    window.location.href = `/api/customer-statement.xlsx?customer_id=${encodeURIComponent(customerId)}`;
+    window.location.href = `/api/customer-statement.xlsx?${statementParams().toString()}`;
   });
 
   qs("#exportStatementPdfBtn").addEventListener("click", () => {
@@ -2887,6 +2880,7 @@ function bindEvents() {
   qs("#cancelDeliveryNoteEdit").addEventListener("click", resetDeliveryNoteForm);
   qs("#cancelSalesReturnEdit").addEventListener("click", resetSalesReturnForm);
   qs("#cancelOpeningBalanceEdit").addEventListener("click", resetOpeningBalanceForm);
+  qs("#cancelCustomerEdit").addEventListener("click", resetCustomerForm);
   qs("#cancelCoverDeliveryBtn").addEventListener("click", () => qs("#coverDeliveryModal").classList.add("hidden"));
   qs("#cancelCoverRequirementsBtn").addEventListener("click", () => qs("#coverRequirementsModal").classList.add("hidden"));
   qs('#coverDeliveryForm select[name="delivery_note_item_id"]').addEventListener("change", updateCoverDeliverySummary);
@@ -3036,6 +3030,7 @@ function bindEvents() {
     const salesReturnPdf = event.target.closest("[data-pdf-sales-return]");
     const saveCustomerResponsibleButton = event.target.closest("[data-save-customer-responsible]");
     const openCustomerStatementButton = event.target.closest("[data-open-customer-statement]");
+    const editCustomerButton = event.target.closest("[data-edit-customer]");
     if (collectionEdit) editCollection(collectionEdit.dataset.editCollection);
     if (collectionDelete) removeRecord("collections", collectionDelete.dataset.deleteCollection).catch((error) => showToast(error.message, true));
     if (expenseEdit) editExpense(expenseEdit.dataset.editExpense);
@@ -3068,6 +3063,7 @@ function bindEvents() {
       refreshSearchableSelect(qs("#statementCustomer"));
       loadCustomerStatement().catch((error) => showToast(error.message,true));
     }
+    if (editCustomerButton) editCustomer(editCustomerButton.dataset.editCustomer);
   });
 }
 
@@ -3092,7 +3088,12 @@ async function init() {
     resetInvoiceForm();
     resetSalesReturnForm();
     resetOpeningBalanceForm();
+    resetCustomerForm();
     applyAccountingDateConstraints();
+    const statementFrom = qs("#statementFrom");
+    const statementTo = qs("#statementTo");
+    if (statementFrom) { statementFrom.min = state.accountingStartDate; statementFrom.value = state.accountingStartDate; }
+    if (statementTo) { statementTo.min = state.accountingStartDate; statementTo.value = new Date().toISOString().slice(0, 10); }
     renderCustomerStatement();
     showApp();
     showToast("النظام جاهز");
