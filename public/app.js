@@ -15,6 +15,8 @@ const state = {
   supplyOrders: [],
   deliveryNotes: [],
   invoices: [],
+  returnableInvoices: [],
+  salesReturns: [],
   invoiceDraft: null,
   customerStatement: null,
   openingBalances: [],
@@ -284,17 +286,18 @@ function applyRolePermissions() {
   qsa(".tab").forEach((tab) => {
     const allowedForCollector = ["collections", "supplyOrders", "deliveryNotes", "invoices", "customerStatement"].includes(tab.dataset.tab);
     const allowedForPlanner = tab.dataset.tab === "supplyOrders";
-    const allowedForInvoiceIssuer = ["supplyOrders", "deliveryNotes", "invoices", "customerStatement", "openingBalances"].includes(tab.dataset.tab);
+    const allowedForInvoiceIssuer = ["supplyOrders", "deliveryNotes", "invoices", "salesReturns", "customerStatement", "openingBalances"].includes(tab.dataset.tab);
     tab.classList.toggle("hidden", (collector && !allowedForCollector) || (planner && !allowedForPlanner) || (invoiceIssuer && !allowedForInvoiceIssuer));
   });
   qsa(".admin-only").forEach((item) => item.classList.toggle("hidden", !isAdmin()));
   qs("#mainMetrics")?.classList.toggle("hidden", collector || planner || invoiceIssuer);
   qs("#backupBtn")?.classList.remove("hidden");
   qs("#collectionModeTabs")?.classList.toggle("hidden", !(isAdmin() || collector));
+  qs("#salesReturnAdminRefunds")?.classList.toggle("hidden", !isAdmin());
 
-  const forms = ["collectionForm", "directSaleForm", "giftForm", "customerForm", "supplyOrderForm", "deliveryNoteForm", "invoiceForm", "openingBalanceForm", "expenseForm", "methodForm", "transferForm", "userForm"];
+  const forms = ["collectionForm", "directSaleForm", "giftForm", "customerForm", "supplyOrderForm", "deliveryNoteForm", "invoiceForm", "salesReturnForm", "openingBalanceForm", "expenseForm", "methodForm", "transferForm", "userForm"];
   forms.forEach((id) => {
-    const allowed = isAdmin() || (collector && ["collectionForm", "directSaleForm", "giftForm", "supplyOrderForm", "deliveryNoteForm"].includes(id)) || (invoiceIssuer && ["invoiceForm", "openingBalanceForm"].includes(id));
+    const allowed = isAdmin() || (collector && ["collectionForm", "directSaleForm", "giftForm", "supplyOrderForm", "deliveryNoteForm"].includes(id)) || (invoiceIssuer && ["invoiceForm", "salesReturnForm", "openingBalanceForm"].includes(id));
     qs(`#${id}`)?.classList.toggle("hidden", !allowed);
   });
   refreshPageModePermissions();
@@ -350,7 +353,7 @@ function fillCustomerSelect(select, current = "") {
   select.innerHTML = "";
   const placeholder = document.createElement("option");
   placeholder.value = "";
-  placeholder.textContent = ["collectionReportCustomer", "collectionCustomerFilter", "supplyOrderCustomerFilter", "deliveryNoteCustomerFilter", "invoiceCustomerFilter"].includes(select.id) ? "كل العملاء" : "اختر العميل";
+  placeholder.textContent = ["collectionReportCustomer", "collectionCustomerFilter", "supplyOrderCustomerFilter", "deliveryNoteCustomerFilter", "invoiceCustomerFilter", "salesReturnCustomerFilter"].includes(select.id) ? "كل العملاء" : "اختر العميل";
   select.appendChild(placeholder);
   state.customers.forEach((customer) => {
     const option = document.createElement("option");
@@ -1293,6 +1296,77 @@ function renderInvoices() {
   `).join("") || `<tr><td colspan="11" class="muted">لا توجد فواتير مسجلة</td></tr>`;
 }
 
+function selectedReturnInvoice() {
+  const id = qs('#salesReturnForm select[name="invoice_id"]')?.value;
+  return state.returnableInvoices.find((item) => String(item.id) === String(id));
+}
+
+function fillReturnInvoiceSelect(selected = "") {
+  const select = qs('#salesReturnForm select[name="invoice_id"]');
+  if (!select) return;
+  select.innerHTML = `<option value="">اختر الفاتورة</option>` + state.returnableInvoices
+    .filter((invoice) => (invoice.items || []).some((item) => Number(item.remaining_quantity || 0) > 0) || String(invoice.id) === String(selected))
+    .map((invoice) => `<option value="${invoice.id}">#${invoice.id} — ${escapeHtml(invoice.customer_name)} — ${invoice.invoice_date || ""}</option>`).join("");
+  select.value = selected || "";
+  refreshSearchableSelect(select);
+}
+
+function renderSalesReturnEditor(existing = null) {
+  const invoice = selectedReturnInvoice();
+  const host = qs("#salesReturnItemEditor");
+  if (!host) return;
+  if (!invoice) {
+    host.innerHTML = "";
+    qs("#salesReturnInvoiceSummary").textContent = "اختر الفاتورة لإظهار الأصناف والكميات المتاحة للمرتجع.";
+    recalculateSalesReturnTotal();
+    return;
+  }
+  qs("#salesReturnInvoiceSummary").textContent = `العميل: ${invoice.customer_name} — قيمة الفاتورة: ${money(invoice.total)}`;
+  const existingByItem = new Map((existing?.items || []).map((item) => [String(item.invoice_item_id), item]));
+  host.innerHTML = (invoice.items || []).map((item) => {
+    const old = existingByItem.get(String(item.id));
+    const available = Number(item.remaining_quantity || 0) + Number(old?.quantity_amount || 0);
+    return `<div class="invoice-item-row" data-return-item="${item.id}" data-price="${Number(item.unit_price || 0)}">
+      <div><strong>${escapeHtml(item.product_type)}</strong><small>${escapeHtml(item.design_name || "-")} — ${escapeHtml(item.size_name || "-")}</small></div>
+      <label>المتاح<input value="${money(available)} ${escapeHtml(item.quantity_unit || "")}" readonly></label>
+      <label>الكمية المرتجعة<input name="quantity_amount" type="number" min="0" max="${available}" step="0.01" value="${old?.quantity_amount || 0}"></label>
+      <label>حالة الصنف<select name="item_condition"><option value="">اختر</option><option value="تالف" ${old?.item_condition === "تالف" ? "selected" : ""}>تالف</option><option value="غير مطابق" ${old?.item_condition === "غير مطابق" ? "selected" : ""}>غير مطابق</option><option value="سليم" ${old?.item_condition === "سليم" ? "selected" : ""}>سليم</option></select></label>
+      <div><small>سعر الفاتورة</small><strong>${money(item.unit_price)}</strong></div>
+      <div><small>الإجمالي</small><strong data-return-line-total>0</strong></div>
+    </div>`;
+  }).join("");
+  recalculateSalesReturnTotal();
+}
+
+function recalculateSalesReturnTotal() {
+  const invoice = selectedReturnInvoice();
+  let total = 0;
+  qsa("[data-return-item]", qs("#salesReturnItemEditor")).forEach((row) => {
+    const line = Number(row.querySelector('[name="quantity_amount"]')?.value || 0) * Number(row.dataset.price || 0);
+    total += line;
+    const target = row.querySelector("[data-return-line-total]");
+    if (target) target.textContent = money(line);
+  });
+  const form = qs("#salesReturnForm");
+  if (form?.refund_serial?.checked) total += Number(invoice?.serial_total || 0);
+  if (form?.refund_delivery?.checked) total += Number(invoice?.delivery_charge || 0);
+  qs("#salesReturnTotal").textContent = money(total);
+}
+
+function renderSalesReturns() {
+  const body = qs("#salesReturnRows");
+  if (!body) return;
+  const customerId = qs("#salesReturnCustomerFilter")?.value;
+  const items = state.salesReturns.filter((item) => !customerId || String(item.customer_id) === String(customerId));
+  body.innerHTML = items.map((item) => `<tr>
+    <td data-label="رقم">${item.id}</td><td data-label="التاريخ">${item.return_date || "-"}</td>
+    <td data-label="الفاتورة">#${item.invoice_id}</td><td data-label="العميل">${escapeHtml(item.customer_name || "-")}</td>
+    <td data-label="السبب">${escapeHtml(item.reason || "-")}</td><td data-label="الأصناف">${money(item.item_count)}</td>
+    <td data-label="القيمة">${money(item.total)}</td><td data-label="المستخدم">${escapeHtml(item.created_by_name || "-")}</td>
+    <td class="actions">${isAdmin() ? `<button type="button" data-edit-sales-return="${item.id}" title="تعديل">✎</button>` : ""}<button type="button" data-xlsx-sales-return="${item.id}">Excel</button><button type="button" data-pdf-sales-return="${item.id}">PDF</button>${isAdmin() ? `<button class="danger" type="button" data-delete-sales-return="${item.id}">×</button>` : ""}</td>
+  </tr>`).join("") || `<tr><td colspan="9" class="muted">لا توجد مرتجعات مسجلة</td></tr>`;
+}
+
 function renderUsers() {
   const body = qs("#userRows");
   if (!body) return;
@@ -1342,6 +1416,7 @@ function renderCustomerStatement() {
   qs("#statementOpeningBalance").textContent = money(data?.totals?.opening_balance || 0);
   qs("#statementInvoiceTotal").textContent = money(data?.totals?.invoices || 0);
   qs("#statementCollectionTotal").textContent = money(data?.totals?.collections || 0);
+  qs("#statementReturnTotal").textContent = money(data?.totals?.returns || 0);
   qs("#statementRemaining").textContent = money(data?.totals?.remaining || 0);
   qs("#statementPeriodStart").textContent = data?.period_start || state.accountingStartDate;
 
@@ -1372,6 +1447,11 @@ function renderCustomerStatement() {
         <td data-label="الطريقة">${item.payment_method || "-"}</td>
       </tr>
     `).join("") || `<tr><td colspan="6" class="muted">لا توجد تحصيلات لهذا العميل</td></tr>`;
+  }
+  const returnBody = qs("#statementReturnRows");
+  if (returnBody) {
+    const rows = data?.returns || [];
+    returnBody.innerHTML = rows.map((item) => `<tr><td data-label="رقم">#${item.id}</td><td data-label="التاريخ">${item.return_date || "-"}</td><td data-label="الفاتورة الأصلية">#${item.invoice_id}</td><td data-label="السبب">${escapeHtml(item.reason || "-")}</td><td data-label="القيمة">${money(item.total)}</td></tr>`).join("") || `<tr><td colspan="5" class="muted">لا توجد مرتجعات لهذا العميل</td></tr>`;
   }
 }
 
@@ -1496,13 +1576,24 @@ function printInvoice(id) {
   ], { branded: true });
 }
 
+function printSalesReturn(id) {
+  const item = state.salesReturns.find((row) => String(row.id) === String(id));
+  if (!item) return;
+  printDocument(`بيان مرتجع مبيعات / إشعار دائن #${item.id}`, [
+    { type: "meta", rows: [["التاريخ", item.return_date || "-"], ["العميل", item.customer_name || "-"], ["الفاتورة الأصلية", `#${item.invoice_id}`], ["السبب", item.reason || "-"], ["ملاحظة", item.note || "-"]] },
+    { type: "table", title: "الأصناف المرتجعة", headers: ["#", "الصنف", "التصميم", "المقاس", "الكمية", "الحالة", "السعر", "الإجمالي"], rows: (item.items || []).map((row) => [row.line_no,row.product_type,row.design_name || "-",row.size_name || "-",`${money(row.quantity_amount)} ${row.quantity_unit || ""}`,row.item_condition,money(row.unit_price),money(row.line_total)]) },
+    { type: "totals", rows: [["إجمالي الأصناف",money(item.items_total)],["رد السريل",money(item.serial_refund)],["رد مصاريف النقل",money(item.delivery_refund)],["إجمالي الإشعار الدائن",money(item.total)]] },
+  ], { branded: true });
+}
+
 function printCustomerStatement() {
   const data = state.customerStatement;
   if (!data) throw new Error("اعرض كشف الحساب أولا");
   printDocument(`كشف حساب ${data.customer.name}`, [
-    { type: "totals", rows: [["بداية الفترة", data.period_start], ["رصيد بداية المدة", money(data.totals.opening_balance)], ["إجمالي الفواتير", money(data.totals.invoices)], ["إجمالي التحصيلات", money(data.totals.collections)], ["المتبقي للتحصيل", money(data.totals.remaining)]] },
+    { type: "totals", rows: [["بداية الفترة", data.period_start], ["رصيد بداية المدة", money(data.totals.opening_balance)], ["إجمالي الفواتير", money(data.totals.invoices)], ["إجمالي التحصيلات", money(data.totals.collections)], ["إجمالي المرتجعات", money(data.totals.returns)], ["المتبقي للتحصيل", money(data.totals.remaining)]] },
     { type: "table", title: "الفواتير", headers: ["رقم", "التاريخ", "إذن التسليم", "الإجمالي", "ملاحظة"], rows: data.invoices.map((item) => [`#${item.id}`, item.invoice_date || "-", `#${item.delivery_note_id}`, money(item.total), item.note || "-"]) },
     { type: "table", title: "التحصيلات", headers: ["رقم", "التاريخ", "المسؤول", "النوع", "المبلغ", "الطريقة"], rows: data.collections.map((item) => [`#${item.id}`, item.entry_date || "-", item.responsible || "-", item.collection_type || "-", money(item.amount), item.payment_method || "-"]) },
+    { type: "table", title: "المرتجعات / الإشعارات الدائنة", headers: ["رقم", "التاريخ", "الفاتورة الأصلية", "السبب", "القيمة"], rows: data.returns.map((item) => [`#${item.id}`, item.return_date || "-", `#${item.invoice_id}`, item.reason || "-", money(item.total)]) },
   ], { branded: true });
 }
 
@@ -1527,6 +1618,7 @@ async function loadBootstrap() {
   fillCustomerSelect(qs("#supplyOrderCustomerFilter"), qs("#supplyOrderCustomerFilter")?.value);
   fillCustomerSelect(qs("#deliveryNoteCustomerFilter"), qs("#deliveryNoteCustomerFilter")?.value);
   fillCustomerSelect(qs("#invoiceCustomerFilter"), qs("#invoiceCustomerFilter")?.value);
+  fillCustomerSelect(qs("#salesReturnCustomerFilter"), qs("#salesReturnCustomerFilter")?.value);
   fillCustomerSelect(qs("#statementCustomer"), qs("#statementCustomer")?.value);
   qsa('select[name="collection_type"]').forEach((select) => fillSelect(select, state.collectionTypes, select.value));
   fillSelect(qs("#collectionReportType"), ["", ...state.collectionTypes], qs("#collectionReportType")?.value);
@@ -1573,6 +1665,7 @@ async function loadCustomers() {
   fillCustomerSelect(qs("#supplyOrderCustomerFilter"), qs("#supplyOrderCustomerFilter")?.value);
   fillCustomerSelect(qs("#deliveryNoteCustomerFilter"), qs("#deliveryNoteCustomerFilter")?.value);
   fillCustomerSelect(qs("#invoiceCustomerFilter"), qs("#invoiceCustomerFilter")?.value);
+  fillCustomerSelect(qs("#salesReturnCustomerFilter"), qs("#salesReturnCustomerFilter")?.value);
   fillSupplyOrderFormLookups();
   fillDeliveryNoteFormLookups();
 }
@@ -1628,6 +1721,14 @@ async function loadInvoices() {
   state.invoices = data.items;
   renderInvoices();
   fillInvoiceDeliverySelect();
+}
+
+async function loadSalesReturns() {
+  const [returnsData, invoiceData] = await Promise.all([api("/api/sales-returns"), api("/api/returnable-invoices")]);
+  state.salesReturns = returnsData.items;
+  state.returnableInvoices = invoiceData.items;
+  renderSalesReturns();
+  fillReturnInvoiceSelect(qs('#salesReturnForm select[name="invoice_id"]')?.value);
 }
 
 async function loadUsers() {
@@ -1705,10 +1806,10 @@ async function reloadAll() {
     return;
   }
   if (isInvoiceIssuer()) {
-    await Promise.all([loadSupplyOrders(), loadDeliveryNotes(), loadInvoices(), loadOpeningBalances()]);
+    await Promise.all([loadSupplyOrders(), loadDeliveryNotes(), loadInvoices(), loadSalesReturns(), loadOpeningBalances()]);
     return;
   }
-  await Promise.all([loadDashboard(), loadCollections(), loadCustomers(), loadOpeningBalances(), loadExpenses(), loadTransfers(), loadSupplyOrders(), loadDeliveryNotes(), loadInvoices(), loadUsers(), loadAudit(), loadExpenseReport(), loadCollectionReport(), loadResponsibleMonthly()]);
+  await Promise.all([loadDashboard(), loadCollections(), loadCustomers(), loadOpeningBalances(), loadExpenses(), loadTransfers(), loadSupplyOrders(), loadDeliveryNotes(), loadInvoices(), loadSalesReturns(), loadUsers(), loadAudit(), loadExpenseReport(), loadCollectionReport(), loadResponsibleMonthly()]);
 }
 
 function formData(form) {
@@ -2274,6 +2375,68 @@ async function issueInvoice() {
   await Promise.all([loadInvoices(), loadAudit()]);
 }
 
+function salesReturnPayload() {
+  const form = qs("#salesReturnForm");
+  return {
+    return_date: form.return_date.value,
+    invoice_id: Number(form.invoice_id.value),
+    reason: form.reason.value,
+    note: form.note.value,
+    refund_serial: form.refund_serial?.checked ? 1 : 0,
+    refund_delivery: form.refund_delivery?.checked ? 1 : 0,
+    items: qsa("[data-return-item]", qs("#salesReturnItemEditor")).map((row) => ({
+      invoice_item_id: Number(row.dataset.returnItem),
+      quantity_amount: Number(row.querySelector('[name="quantity_amount"]')?.value || 0),
+      item_condition: row.querySelector('[name="item_condition"]')?.value || "",
+    })),
+  };
+}
+
+function resetSalesReturnForm() {
+  const form = qs("#salesReturnForm");
+  form.reset();
+  form.elements.id.value = "";
+  form.return_date.value = new Date().toISOString().slice(0, 10);
+  form.return_date.min = state.accountingStartDate;
+  form.invoice_id.disabled = false;
+  qs("#salesReturnFormTitle").textContent = "إضافة مرتجع مبيعات";
+  qs("#cancelSalesReturnEdit").classList.add("hidden");
+  fillReturnInvoiceSelect();
+  renderSalesReturnEditor();
+}
+
+async function saveSalesReturn(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const id = form.elements.id.value;
+  const payload = salesReturnPayload();
+  if (id) await api(`/api/sales-returns/${id}`, { method: "PUT", body: JSON.stringify(payload) });
+  else await api("/api/sales-returns", { method: "POST", body: JSON.stringify(payload) });
+  showToast(id ? "تم تحديث المرتجع والإشعار الدائن" : "تم إصدار بيان المرتجع والإشعار الدائن");
+  resetSalesReturnForm();
+  await Promise.all([loadSalesReturns(), loadInvoices(), loadAudit()]);
+}
+
+function editSalesReturn(id) {
+  const item = state.salesReturns.find((row) => String(row.id) === String(id));
+  if (!item) return;
+  setPageMode("salesReturns", "entry");
+  const form = qs("#salesReturnForm");
+  form.elements.id.value = item.id;
+  fillReturnInvoiceSelect(item.invoice_id);
+  form.invoice_id.value = item.invoice_id;
+  form.invoice_id.disabled = true;
+  form.return_date.value = item.return_date || "";
+  form.reason.value = item.reason || "";
+  form.note.value = item.note || "";
+  if (form.refund_serial) form.refund_serial.checked = Number(item.serial_refund || 0) > 0;
+  if (form.refund_delivery) form.refund_delivery.checked = Number(item.delivery_refund || 0) > 0;
+  qs("#salesReturnFormTitle").textContent = `تعديل مرتجع #${item.id}`;
+  qs("#cancelSalesReturnEdit").classList.remove("hidden");
+  renderSalesReturnEditor(item);
+  form.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
 async function saveUser(event) {
   event.preventDefault();
   const form = event.currentTarget;
@@ -2649,6 +2812,7 @@ function bindEvents() {
   bindFormAction("#openingBalanceForm", saveOpeningBalance);
   bindFormAction("#supplyOrderForm", saveSupplyOrder);
   bindFormAction("#deliveryNoteForm", saveDeliveryNote);
+  bindFormAction("#salesReturnForm", saveSalesReturn);
   bindFormAction("#coverDeliveryForm", saveCoverDelivery);
   bindFormAction("#coverRequirementsForm", saveCoverRequirements);
   bindFormAction("#expenseForm", saveExpense);
@@ -2660,6 +2824,7 @@ function bindEvents() {
   qs("#cancelTransferEdit").addEventListener("click", resetTransferForm);
   qs("#cancelSupplyOrderEdit").addEventListener("click", resetSupplyOrderForm);
   qs("#cancelDeliveryNoteEdit").addEventListener("click", resetDeliveryNoteForm);
+  qs("#cancelSalesReturnEdit").addEventListener("click", resetSalesReturnForm);
   qs("#cancelOpeningBalanceEdit").addEventListener("click", resetOpeningBalanceForm);
   qs("#cancelCoverDeliveryBtn").addEventListener("click", () => qs("#coverDeliveryModal").classList.add("hidden"));
   qs("#cancelCoverRequirementsBtn").addEventListener("click", () => qs("#coverRequirementsModal").classList.add("hidden"));
@@ -2714,6 +2879,7 @@ function bindEvents() {
   qs("#supplyOrderCustomerFilter").addEventListener("change", renderSupplyOrders);
   qs("#deliveryNoteCustomerFilter").addEventListener("change", renderDeliveryNotes);
   qs("#invoiceCustomerFilter").addEventListener("change", renderInvoices);
+  qs("#salesReturnCustomerFilter").addEventListener("change", renderSalesReturns);
   qs("#openingBalanceCustomerFilter").addEventListener("change", renderOpeningBalances);
   qs("#customerSearch").addEventListener("input", renderCustomers);
   qs("#collectionMonth").addEventListener("change", loadCollections);
@@ -2775,6 +2941,11 @@ function bindEvents() {
     const draftItem = state.invoiceDraft?.items.find((item) => String(item.delivery_note_item_id) === String(row?.dataset.invoiceItem));
     if (draftItem) draftItem.unit_price = Number(event.target.value || 0);
   });
+  qs('#salesReturnForm select[name="invoice_id"]').addEventListener("change", () => renderSalesReturnEditor());
+  qs("#salesReturnItemEditor").addEventListener("input", recalculateSalesReturnTotal);
+  qs("#salesReturnItemEditor").addEventListener("change", recalculateSalesReturnTotal);
+  qs('#salesReturnForm input[name="refund_serial"]').addEventListener("change", recalculateSalesReturnTotal);
+  qs('#salesReturnForm input[name="refund_delivery"]').addEventListener("change", recalculateSalesReturnTotal);
 
   document.addEventListener("click", (event) => {
     const collectionEdit = event.target.closest("[data-edit-collection]");
@@ -2798,6 +2969,10 @@ function bindEvents() {
     const deliveryNotePdf = event.target.closest("[data-pdf-delivery-note]");
     const invoiceXlsx = event.target.closest("[data-xlsx-invoice]");
     const invoicePdf = event.target.closest("[data-pdf-invoice]");
+    const salesReturnEdit = event.target.closest("[data-edit-sales-return]");
+    const salesReturnDelete = event.target.closest("[data-delete-sales-return]");
+    const salesReturnXlsx = event.target.closest("[data-xlsx-sales-return]");
+    const salesReturnPdf = event.target.closest("[data-pdf-sales-return]");
     const saveCustomerResponsibleButton = event.target.closest("[data-save-customer-responsible]");
     if (collectionEdit) editCollection(collectionEdit.dataset.editCollection);
     if (collectionDelete) removeRecord("collections", collectionDelete.dataset.deleteCollection).catch((error) => showToast(error.message, true));
@@ -2820,6 +2995,10 @@ function bindEvents() {
     if (deliveryNotePdf) printDeliveryNote(deliveryNotePdf.dataset.pdfDeliveryNote);
     if (invoiceXlsx) window.location.href = `/api/invoices/${invoiceXlsx.dataset.xlsxInvoice}.xlsx`;
     if (invoicePdf) printInvoice(invoicePdf.dataset.pdfInvoice);
+    if (salesReturnEdit) editSalesReturn(salesReturnEdit.dataset.editSalesReturn);
+    if (salesReturnDelete && confirm(`حذف المرتجع رقم ${salesReturnDelete.dataset.deleteSalesReturn}؟ سيعود تأثيره إلى رصيد العميل.`)) api(`/api/sales-returns/${salesReturnDelete.dataset.deleteSalesReturn}`, { method: "DELETE" }).then(async () => { showToast("تم حذف المرتجع"); await Promise.all([loadSalesReturns(),loadInvoices(),loadAudit()]); }).catch((error) => showToast(error.message,true));
+    if (salesReturnXlsx) window.location.href = `/api/sales-returns/${salesReturnXlsx.dataset.xlsxSalesReturn}.xlsx`;
+    if (salesReturnPdf) printSalesReturn(salesReturnPdf.dataset.pdfSalesReturn);
     if (saveCustomerResponsibleButton) saveCustomerResponsible(saveCustomerResponsibleButton.dataset.saveCustomerResponsible).catch((error) => showToast(error.message, true));
   });
 }
@@ -2843,6 +3022,7 @@ async function init() {
     resetSupplyOrderForm();
     resetDeliveryNoteForm();
     resetInvoiceForm();
+    resetSalesReturnForm();
     resetOpeningBalanceForm();
     applyAccountingDateConstraints();
     renderCustomerStatement();

@@ -64,6 +64,7 @@
         <button class="tab" data-tab="supplyOrders" type="button">أمر التوريد</button>
         <button class="tab" data-tab="deliveryNotes" type="button">إذن التسليم</button>
         <button class="tab" data-tab="invoices" type="button">الفواتير</button>
+        <button class="tab" data-tab="salesReturns" type="button">المرتجعات</button>
         <button class="tab" data-tab="customerStatement" type="button">كشف حساب</button>
         <button class="tab" data-tab="openingBalances" type="button">أرصدة أول المدة</button>
         <button class="tab" data-tab="expenses" type="button">المصروفات</button>
@@ -372,6 +373,32 @@
         </div>
       </section>
 
+      <section id="salesReturns" class="tab-panel">
+        <div class="page-action-tabs" role="tablist" aria-label="المرتجعات"><button class="page-action-tab active" data-page-mode="entry" type="button">إضافة مرتجع</button><button class="page-action-tab" data-page-mode="display" type="button">عرض وإدارة المرتجعات</button></div>
+        <div class="entry-layout supply-layout">
+          <form id="salesReturnForm" class="form-panel" data-page-pane="entry">
+            <h2 id="salesReturnFormTitle">إضافة مرتجع مبيعات</h2>
+            <input type="hidden" name="id">
+            <label>تاريخ المرتجع<input name="return_date" type="date" required></label>
+            <label>الفاتورة الأصلية<select name="invoice_id" required></select></label>
+            <label>سبب المرتجع<select name="reason" required><option value="">اختر السبب</option><option value="تالف">تالف</option><option value="غير مطابق">غير مطابق</option><option value="أخرى">أخرى</option></select></label>
+            <p class="muted wide" id="salesReturnInvoiceSummary">اختر الفاتورة لإظهار الأصناف والكميات المتاحة للمرتجع.</p>
+            <div id="salesReturnItemEditor" class="invoice-items wide"></div>
+            <div id="salesReturnAdminRefunds" class="wide grid two hidden">
+              <label class="check"><input name="refund_serial" type="checkbox"> رد قيمة السريل كاملة</label>
+              <label class="check"><input name="refund_delivery" type="checkbox"> رد مصاريف النقل كاملة</label>
+            </div>
+            <label class="wide">ملاحظة<textarea name="note" rows="2"></textarea></label>
+            <div class="invoice-total wide"><div><dt>إجمالي الإشعار الدائن</dt><dd id="salesReturnTotal">0</dd></div></div>
+            <div class="form-actions"><button type="submit">حفظ وإصدار بيان المرتجع</button><button id="cancelSalesReturnEdit" class="secondary hidden" type="button">إلغاء التعديل</button></div>
+          </form>
+          <div class="panel" data-page-pane="display">
+            <div class="panel-head"><h2>المرتجعات المسجلة</h2><div class="filters"><select id="salesReturnCustomerFilter"><option value="">كل العملاء</option></select></div></div>
+            <div class="table-wrap records"><table><thead><tr><th>رقم</th><th>التاريخ</th><th>الفاتورة</th><th>العميل</th><th>السبب</th><th>الأصناف</th><th>القيمة</th><th>المستخدم</th><th></th></tr></thead><tbody id="salesReturnRows"></tbody></table></div>
+          </div>
+        </div>
+      </section>
+
       <section id="customerStatement" class="tab-panel">
         <div class="panel">
           <div class="panel-head">
@@ -387,6 +414,7 @@
             <div class="metric"><span>رصيد بداية المدة</span><strong id="statementOpeningBalance">0</strong></div>
             <div class="metric"><span>إجمالي الفواتير</span><strong id="statementInvoiceTotal">0</strong></div>
             <div class="metric"><span>إجمالي التحصيلات</span><strong id="statementCollectionTotal">0</strong></div>
+            <div class="metric"><span>إجمالي المرتجعات</span><strong id="statementReturnTotal">0</strong></div>
             <div class="metric accent"><span>المتبقي للتحصيل</span><strong id="statementRemaining">0</strong></div>
           </section>
           <p class="muted section-note">يبدأ كشف الحساب من <strong id="statementPeriodStart">2026-09-01</strong>. الحركات الأقدم محفوظة في صفحاتها للأرشيف ولا تظهر هنا.</p>
@@ -408,6 +436,10 @@
                   <tbody id="statementCollectionRows"></tbody>
                 </table>
               </div>
+            </div>
+            <div>
+              <div class="panel-head"><h2>المرتجعات / الإشعارات الدائنة</h2></div>
+              <div class="table-wrap records"><table><thead><tr><th>رقم</th><th>التاريخ</th><th>الفاتورة الأصلية</th><th>السبب</th><th>القيمة</th></tr></thead><tbody id="statementReturnRows"></tbody></table></div>
             </div>
           </div>
         </div>
