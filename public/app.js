@@ -1737,7 +1737,10 @@ async function loadTransfers() {
 }
 
 async function loadSupplyOrders() {
-  const data = await api("/api/supply-orders");
+  const customerId = qs("#supplyOrderCustomerFilter")?.value;
+  const params = new URLSearchParams();
+  if (customerId) params.set("customer_id", customerId);
+  const data = await api(`/api/supply-orders${params.size ? `?${params.toString()}` : ""}`);
   state.supplyOrders = data.items;
   renderSupplyOrders();
   renderInvoiceEditor();
@@ -2960,7 +2963,7 @@ function bindEvents() {
   });
 
   qs("#collectionCustomerFilter").addEventListener("change", loadCollections);
-  qs("#supplyOrderCustomerFilter").addEventListener("change", renderSupplyOrders);
+  qs("#supplyOrderCustomerFilter").addEventListener("change", () => loadSupplyOrders().catch((error) => showToast(error.message, true)));
   qs("#deliveryNoteCustomerFilter").addEventListener("change", renderDeliveryNotes);
   qs("#invoiceCustomerFilter").addEventListener("change", renderInvoices);
   qs("#salesReturnCustomerFilter").addEventListener("change", renderSalesReturns);

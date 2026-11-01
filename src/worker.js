@@ -80,7 +80,7 @@ async function handleApi(request, env, url) {
     const customerId = idFromPath(url.pathname);
     if (method === "PUT") return updateOpeningBalance(request, env, user, customerId);
   }
-  if (url.pathname === "/api/supply-orders" && method === "GET") return listSupplyOrders(env);
+  if (url.pathname === "/api/supply-orders" && method === "GET") return listSupplyOrders(env, url);
   if (url.pathname === "/api/supply-orders" && method === "POST") return createSupplyOrder(request, env, user);
   if (/^\/api\/supply-orders\/\d+\.xlsx$/.test(url.pathname) && method === "GET") return supplyOrderXlsxResponse(env, idFromExportPath(url.pathname));
   if (url.pathname.startsWith("/api/supply-orders/")) {
@@ -998,14 +998,28 @@ async function receivablesXlsx(env, user, url) {
   return xlsxDownload(reportXlsx("مديونيات العملاء",prepared.rows,prepared.merges,{brandLogo:await xlsxBrandLogo(env),logoColumn:7}),`customer-receivables-${new Date().toISOString().slice(0,10)}.xlsx`);
 }
 
-async function listSupplyOrders(env) {
-  const result = await env.DB.prepare(
-    `SELECT supply_orders.*, users.display_name AS created_by_name
-     FROM supply_orders
-     LEFT JOIN users ON users.id = supply_orders.created_by
-     ORDER BY COALESCE(order_date, '') DESC, id DESC
-     LIMIT 300`
-  ).all();
+async function listSupplyOrders(env, url) {
+  const customerId = Number(url.searchParams.get("customer_id") || 0) || null;
+  let result;
+  if (customerId) {
+    const customer = await env.DB.prepare("SELECT id, name FROM customers WHERE id=? AND active=1").bind(customerId).first();
+    if (!customer) throw new HttpError("العميل غير صحيح", 400);
+    result = await env.DB.prepare(
+      `SELECT supply_orders.*, users.display_name AS created_by_name
+       FROM supply_orders
+       LEFT JOIN users ON users.id = supply_orders.created_by
+       WHERE supply_orders.customer_id=? OR supply_orders.customer_name=?
+       ORDER BY COALESCE(order_date, '') DESC, supply_orders.id DESC`
+    ).bind(customer.id, customer.name).all();
+  } else {
+    result = await env.DB.prepare(
+      `SELECT supply_orders.*, users.display_name AS created_by_name
+       FROM supply_orders
+       LEFT JOIN users ON users.id = supply_orders.created_by
+       ORDER BY COALESCE(order_date, '') DESC, supply_orders.id DESC
+       LIMIT 300`
+    ).all();
+  }
   return json({ items: result.results });
 }
 
