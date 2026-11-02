@@ -1519,8 +1519,21 @@ async function updateDeliveryNote(request, env, user, id) {
   if (!before) throw new HttpError("Record not found", 404);
   if (before.transaction_type === "direct_cash") throw new HttpError("يتم تعديل البيع النقدي المباشر من سجل التحصيلات", 409);
   assertRecordNotArchived(before, "delivery_date");
-  if (before.items.some((item) => item.required_quantity_amount != null)) throw new HttpError("استخدم استكمال تسليم الغطيان لهذا الإذن؛ بيانات التتبع محمية من التعديل العام", 409);
   const payload = await readJson(request);
+  const trackedBefore = before.items.filter((item) => item.product_type === "غطيان" && item.required_quantity_amount != null);
+  if (trackedBefore.length) {
+    const requestedBySource = new Map((Array.isArray(payload.items) ? payload.items : []).map((item) => [String(item.source_item_id || ""), item]));
+    for (const tracked of trackedBefore) {
+      const requested = requestedBySource.get(String(tracked.id));
+      if (!requested) throw new HttpError("لا يمكن حذف بند غطاء مرتبط بسجل تسليم", 409);
+      const changedTracking = requested.product_type !== tracked.product_type
+        || Number(requested.size_id || 0) !== Number(tracked.size_id || 0)
+        || String(requested.quantity_unit || "") !== String(tracked.quantity_unit || "")
+        || Number(requested.quantity_amount || 0) !== Number(tracked.quantity_amount || 0)
+        || Number(requested.required_quantity_amount || 0) !== Number(tracked.required_quantity_amount || 0);
+      if (changedTracking) throw new HttpError("الكمية المسلمة وإجمالي المستحق وبيانات بند الغطاء تُعدل من أدوات تتبع الغطيان فقط", 409);
+    }
+  }
   const activateCoverTracking = Array.isArray(payload.items) && payload.items.some((item) =>
     item.product_type === "غطيان" && item.required_quantity_amount !== "" && item.required_quantity_amount != null
   );
@@ -1537,8 +1550,16 @@ async function updateDeliveryNote(request, env, user, id) {
   ).bind(data.delivery_date, data.customer_id, data.customer_name, data.responsible, data.note, data.fulfillment_status, nowIso(), id)];
 
   if (linkedInvoice) statements.push(env.DB.prepare("DELETE FROM invoice_items WHERE invoice_id = ?").bind(linkedInvoice.id));
-  statements.push(env.DB.prepare("DELETE FROM delivery_note_items WHERE delivery_note_id = ?").bind(id));
+  if (trackedBefore.length) statements.push(env.DB.prepare("DELETE FROM delivery_note_items WHERE delivery_note_id = ? AND required_quantity_amount IS NULL").bind(id));
+  else statements.push(env.DB.prepare("DELETE FROM delivery_note_items WHERE delivery_note_id = ?").bind(id));
+  const trackedIds = new Set(trackedBefore.map((item) => String(item.id)));
   for (const item of data.items) {
+    if (item.source_item_id && trackedIds.has(String(item.source_item_id))) {
+      statements.push(env.DB.prepare(
+        `UPDATE delivery_note_items SET line_no=?,note=? WHERE id=? AND delivery_note_id=?`
+      ).bind(item.line_no, item.note, item.source_item_id, id));
+      continue;
+    }
     statements.push(env.DB.prepare(
       `INSERT INTO delivery_note_items(delivery_note_id,line_no,product_type,design_id,design_name,size_id,size_name,quantity_unit,quantity_amount,required_quantity_amount,note,supply_order_id,is_general,general_price_type,general_unit_price)
        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`

@@ -627,6 +627,7 @@ function saveVisibleDeliveryItem() {
   const current = deliveryCurrentItem();
   state.deliveryDraft.items[state.deliveryDraft.index] = {
     source_item_id: current.source_item_id || null,
+    tracking_locked: Boolean(current.tracking_locked),
     product_type: form.product_type.value,
     design_id: isCovers || isGeneral ? "" : form.design_id.value,
     size_id: form.size_id.value,
@@ -655,6 +656,13 @@ function showDeliveryItem(index) {
   form.general_unit_price.value = item.general_unit_price || "";
   form.item_note.value = item.note || "";
   toggleDeliveryProductType();
+  const trackingLocked = Boolean(item.tracking_locked);
+  [form.product_type, form.size_id, form.quantity_unit, form.quantity_amount, form.required_quantity_amount].forEach((field) => {
+    field.disabled = trackingLocked;
+    field.title = trackingLocked ? "هذا الحقل محمي للحفاظ على سجل تسليم الغطيان" : "";
+    const searchable = searchableSelects.get(field);
+    if (searchable) searchable.input.disabled = trackingLocked;
+  });
   qs("#deliveryItemCounter").textContent = `الصنف ${state.deliveryDraft.index + 1} من ${state.deliveryDraft.items.length}`;
   qs("#prevDeliveryItemBtn").disabled = state.deliveryDraft.index === 0;
   renderDeliveryDraftRows();
@@ -1265,7 +1273,7 @@ function renderDeliveryNotes() {
       <td class="actions">
         ${item.fulfillment_status === "incomplete" && (isAdmin() || isCollector()) ? `<button type="button" data-add-cover-delivery="${item.id}">استكمال الغطيان</button>` : ""}
         ${isAdmin() && !isArchivedDate(item.delivery_date) && (item.items || []).some((row) => row.required_quantity_amount != null) ? `<button type="button" data-edit-cover-requirements="${item.id}">تعديل المستحق</button>` : ""}
-        ${isAdmin() && item.transaction_type !== "direct_cash" && !isArchivedDate(item.delivery_date) && !(item.items || []).some((row) => row.required_quantity_amount != null) ? `<button type="button" data-edit-delivery-note="${item.id}" title="تعديل">✎</button>` : ""}
+        ${isAdmin() && item.transaction_type !== "direct_cash" && !isArchivedDate(item.delivery_date) ? `<button type="button" data-edit-delivery-note="${item.id}" title="تعديل الإذن مع حماية بيانات تتبع الغطيان">✎</button>` : ""}
         <button type="button" data-xlsx-delivery-note="${item.id}" title="Excel">Excel</button>
         <button type="button" data-pdf-delivery-note="${item.id}" title="PDF">PDF</button>
         ${isAdmin() && item.transaction_type === "direct_cash" ? `<span class="muted">يُدار من التحصيلات</span>` : isAdmin() && !isArchivedDate(item.delivery_date) ? `<button class="danger" type="button" data-delete-delivery-note="${item.id}" title="حذف">×</button>` : isAdmin() ? `<span class="muted">للعرض فقط</span>` : ""}
@@ -2690,6 +2698,7 @@ function editDeliveryNote(id) {
       quantity_unit: row.quantity_unit || "كيلو",
       quantity_amount: row.quantity_amount || "",
       required_quantity_amount: row.required_quantity_amount || "",
+      tracking_locked: row.product_type === "غطيان" && row.required_quantity_amount != null,
       is_general: Boolean(row.is_general),
       general_price_type: row.general_price_type || "without_cover",
       general_unit_price: row.general_unit_price ?? "",
