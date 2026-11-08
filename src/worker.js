@@ -966,8 +966,17 @@ async function receivablesData(env, user, url) {
   }).sort((left,right) => sort === "asc" ? left.balance-right.balance : right.balance-left.balance);
   const debtRows = baseRows.filter((row) => row.balance > 0.004);
   const creditRows = baseRows.filter((row) => row.balance < -0.004);
+  const visibleTotals = rows.reduce((totals,row) => ({
+    opening_balance: totals.opening_balance + row.opening_balance,
+    invoices: totals.invoices + row.invoices,
+    collections: totals.collections + row.collections,
+    returns: totals.returns + row.returns,
+    discounts: totals.discounts + row.discounts,
+    balance: totals.balance + row.balance,
+  }), { opening_balance:0, invoices:0, collections:0, returns:0, discounts:0, balance:0 });
   return {
     items: rows,
+    visible_totals: Object.fromEntries(Object.entries(visibleTotals).map(([key,value]) => [key,currencyValue(value)])),
     totals: {
       debt: currencyValue(debtRows.reduce((sum,row) => sum+row.balance,0)),
       debt_customers: debtRows.length,
@@ -993,7 +1002,7 @@ async function receivablesXlsx(env, user, url) {
   addRow(["تاريخ التقرير",new Date().toISOString().slice(0,10),"بداية الفترة",data.period_start,"إجمالي المديونيات",data.totals.debt,"عدد العملاء المدينين",data.totals.debt_customers,"إجمالي الأرصدة الدائنة",data.totals.credit],"meta");
   addRow(["#","العميل","المسؤول","رصيد أول المدة","الفواتير","التحصيلات","المرتجعات","الخصومات","صافي المديونية","آخر فاتورة","آخر تحصيل"],"header");
   data.items.forEach((row,index) => addRow([index+1,row.name,row.responsible || "",row.opening_balance,row.invoices,row.collections,row.returns,row.discounts,row.balance,row.last_invoice_date || "",row.last_collection_date || ""]));
-  addRow(["","","","","","","","إجمالي المديونيات المستحقة",data.totals.debt,""],"total");
+  addRow(["","إجمالي النتائج المعروضة","",data.visible_totals.opening_balance,data.visible_totals.invoices,data.visible_totals.collections,data.visible_totals.returns,data.visible_totals.discounts,data.visible_totals.balance,"",""] ,"total");
   const prepared = normalizeSheetRows(rows);
   return xlsxDownload(reportXlsx("مديونيات العملاء",prepared.rows,prepared.merges,{brandLogo:await xlsxBrandLogo(env),logoColumn:7}),`customer-receivables-${new Date().toISOString().slice(0,10)}.xlsx`);
 }

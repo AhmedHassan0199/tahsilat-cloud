@@ -1465,6 +1465,12 @@ function renderReceivables() {
   qs("#receivablesCreditTotal").textContent = money(data?.totals?.credit || 0);
   qs("#receivablesLargestDebt").textContent = money(data?.totals?.largest_debt || 0);
   qs("#receivablesZeroCount").textContent = money(data?.totals?.zero_customers || 0);
+  qs("#receivablesVisibleOpening").textContent = money(data?.visible_totals?.opening_balance || 0);
+  qs("#receivablesVisibleInvoices").textContent = money(data?.visible_totals?.invoices || 0);
+  qs("#receivablesVisibleCollections").textContent = money(data?.visible_totals?.collections || 0);
+  qs("#receivablesVisibleReturns").textContent = money(data?.visible_totals?.returns || 0);
+  qs("#receivablesVisibleDiscounts").textContent = money(data?.visible_totals?.discounts || 0);
+  qs("#receivablesVisibleBalance").textContent = money(data?.visible_totals?.balance || 0);
   const rows = data?.items || [];
   qs("#receivablesSummary").textContent = `عدد النتائج: ${rows.length} — بداية الحساب: ${data?.period_start || state.accountingStartDate}${data?.scope && data.scope !== "all" ? ` — العملاء التابعون لـ ${data.scope}` : ""}`;
   qs("#receivablesRows").innerHTML = rows.map((item,index) => `<tr>
@@ -1630,7 +1636,7 @@ function printReceivables() {
   const data = state.receivables;
   if (!data) throw new Error("اعرض المديونيات أولًا");
   printDocument("تقرير مديونيات العملاء", [
-    { type: "totals", rows: [["تاريخ التقرير",new Date().toISOString().slice(0,10)],["بداية الفترة",data.period_start],["إجمالي المديونيات",money(data.totals.debt)],["العملاء المدينون",money(data.totals.debt_customers)],["إجمالي الأرصدة الدائنة",money(data.totals.credit)],["أكبر مديونية",money(data.totals.largest_debt)]] },
+    { type: "totals", rows: [["تاريخ التقرير",new Date().toISOString().slice(0,10)],["بداية الفترة",data.period_start],["إجمالي النتائج المعروضة",money(data.visible_totals.balance)],["إجمالي المديونيات",money(data.totals.debt)],["العملاء المدينون",money(data.totals.debt_customers)],["إجمالي الأرصدة الدائنة",money(data.totals.credit)],["أكبر مديونية",money(data.totals.largest_debt)]] },
     { type: "table", title: "العملاء", headers: ["#","العميل","المسؤول","رصيد أول المدة","الفواتير","التحصيلات","المرتجعات","الخصومات","صافي المديونية","آخر فاتورة","آخر تحصيل"], rows: data.items.map((row,index) => [index+1,row.name,row.responsible || "غير محدد",money(row.opening_balance),money(row.invoices),money(row.collections),money(row.returns),money(row.discounts),money(row.balance),row.last_invoice_date || "-",row.last_collection_date || "لم يسدد"]) },
   ], { branded: true });
 }
